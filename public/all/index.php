@@ -162,7 +162,7 @@ $list = $connection->query($sql)->fetchAll();
     
     <form method="GET" class="filter-bar">
         <div class="filter-row">
-            <div class="filter-group" style="flex:2;"><label>🔍 Search (code, name, serial)</label><input type="text" name="search" value="<?= htmlspecialchars($search) ?>" placeholder="Search..."></div>
+            <div class="filter-group" style="flex:2;"><label>🔍 Search (code, name, serial)</label><input type="text" name="search" value="<?= htmlspecialchars($search) ?>" placeholder="Search..." style="width: -webkit-fill-available;"></div>
             <div class="filter-group"><label>📁 Type</label><select name="filter_tip"><option value="">All</option><?php foreach ($allTipuri as $val => $name): ?><option value="<?= $val ?>" <?= ($filterTip == $val) ? 'selected' : '' ?>><?= htmlspecialchars($name) ?></option><?php endforeach; ?></select></div>
             <div class="filter-group"><label>📍 Location</label><select name="filter_locatie"><option value="">All</option><?php foreach ($allLocatii as $loc): ?><option value="<?= htmlspecialchars($loc) ?>" <?= ($filterLocatie == $loc) ? 'selected' : '' ?>><?= htmlspecialchars($loc) ?></option><?php endforeach; ?></select></div>
             <div class="filter-group"><label>⚙️ Status</label><select name="filter_status"><option value="">All</option><?php foreach ($allStari as $val => $info): ?><option value="<?= $val ?>" <?= ($filterStatus == $val) ? 'selected' : '' ?>><?= htmlspecialchars($info['name']) ?></option><?php endforeach; ?></select></div>
