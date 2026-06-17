@@ -86,15 +86,29 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['save'])) {
                 'NOTIFICATION_SENT' => 'N'
             ];
             
-            $result = EquipmentTable::add($fields);
-            if ($result->isSuccess()) {
-                $_SESSION['INVENTAR_NOTIFICATION'] = [
-                    'type' => 'success',
-                    'title' => '✅ Equipment added successfully!',
-                    'message' => "Equipment {$codInventar} has been registered. Administrators have been notified."
-                ];
-                LocalRedirect("/inventar/");
-            } else {
+			$result = EquipmentTable::add($fields);
+			if ($result->isSuccess()) {
+				$newId = $result->getId();
+				
+				// Verifică dacă notificările pentru echipamente noi sunt activate
+				$notificationsEnabled = Option::get('bitrix.inventar', 'notification_new_equipment', 'Y');
+				
+				if ($notificationsEnabled == 'Y') {
+					$_SESSION['INVENTAR_NOTIFICATION'] = [
+						'type' => 'success',
+						'title' => '✅ Equipment added successfully!',
+						'message' => "Equipment {$codInventar} has been registered. Administrators have been notified."
+					];
+				} else {
+					$_SESSION['INVENTAR_NOTIFICATION'] = [
+						'type' => 'success',
+						'title' => '✅ Equipment added successfully!',
+						'message' => "Equipment {$codInventar} has been registered. (Notifications are disabled)"
+					];
+				}
+				
+				LocalRedirect("/inventar/");
+			} else {
                 $error = "Error: " . implode(", ", $result->getErrorMessages());
             }
         }

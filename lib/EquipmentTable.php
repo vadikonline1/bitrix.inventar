@@ -72,6 +72,10 @@ class EquipmentTable extends Entity\DataManager
                 'COD_INVENTAR' => $prefix . str_pad($nextNum, 5, '0', STR_PAD_LEFT), 
                 'NOTIFICATION_SENT' => 'N'
             ]);
+        } else {
+            $result->modifyFields([
+                'NOTIFICATION_SENT' => 'N'
+            ]);
         }
         
         global $USER;
@@ -117,17 +121,26 @@ class EquipmentTable extends Entity\DataManager
     }
     
     /**
-     * Send notification to group when new equipment is added
+     * Trimite notificare grupului când se adaugă un echipament nou
+     * Dacă notificările sunt dezactivate, marchează automat ca trimis (Y)
      */
     public static function sendNewEquipmentNotification($data)
     {
-        // Check if notifications for new equipment are enabled
+        // Verifică dacă notificările pentru echipamente noi sunt activate
         $notificationsEnabled = Option::get('bitrix.inventar', 'notification_new_equipment', 'Y');
+        
+        // Dacă notificările sunt dezactivate, marchează ca trimis și oprește
         if ($notificationsEnabled != 'Y') {
+            // Marchează notificarea ca trimisă fără a trimite nimic
+            if (isset($data['ID']) && (!isset($data['NOTIFICATION_SENT']) || $data['NOTIFICATION_SENT'] != 'Y')) {
+                try {
+                    static::update($data['ID'], ['NOTIFICATION_SENT' => 'Y']);
+                } catch (\Exception $e) {}
+            }
             return;
         }
         
-        // Check if notification was already sent
+        // Verifică dacă notificarea a fost deja trimisă
         if (isset($data['NOTIFICATION_SENT']) && $data['NOTIFICATION_SENT'] == 'Y') {
             return;
         }
@@ -137,6 +150,10 @@ class EquipmentTable extends Entity\DataManager
         }
         
         if (!Loader::includeModule('im')) {
+            // Dacă modulul IM nu este disponibil, marchează ca trimis pentru a evita încercări repetate
+            try {
+                static::update($data['ID'], ['NOTIFICATION_SENT' => 'Y']);
+            } catch (\Exception $e) {}
             return;
         }
         
@@ -153,7 +170,7 @@ class EquipmentTable extends Entity\DataManager
         $message .= "🔗 View details: {$detailsLink}\n";
         $message .= "✏️ Edit: {$editLink}";
         
-        // Collect users from Inventory group
+        // Colectează utilizatorii din grupul Inventar
         $userIds = [];
         $groupId = Option::get('bitrix.inventar', 'inventar_group_id');
         
@@ -167,7 +184,7 @@ class EquipmentTable extends Entity\DataManager
             }
         }
         
-        // Add administrators
+        // Adaugă administratorii
         $adminUsers = \Bitrix\Main\UserGroupTable::getList([
             'filter' => ['=GROUP_ID' => 1],
             'select' => ['USER_ID']
@@ -176,7 +193,7 @@ class EquipmentTable extends Entity\DataManager
             $userIds[$admin['USER_ID']] = $admin['USER_ID'];
         }
         
-        // Send notification
+        // Trimite notificare
         foreach ($userIds as $userId) {
             \CIMNotify::Add([
                 'TO_USER_ID' => $userId,
@@ -187,18 +204,19 @@ class EquipmentTable extends Entity\DataManager
             ]);
         }
         
-        // Mark notification as sent
+        // Marchează notificarea ca trimisă
         try {
             static::update($data['ID'], ['NOTIFICATION_SENT' => 'Y']);
         } catch (\Exception $e) {}
     }
     
     /**
-     * Send notification to responsible person when equipment is assigned to them
+     * Trimite notificare persoanei responsabile că i s-a alocat un echipament
+     * Dacă notificările sunt dezactivate, nu trimite nimic (nu avem ce marca pentru alocări)
      */
     public static function sendAllocationNotification($equipmentId, $userId)
     {
-        // Check if assignment notifications are enabled
+        // Verifică dacă notificările pentru alocare sunt activate
         $notificationsEnabled = Option::get('bitrix.inventar', 'notification_assignment', 'Y');
         if ($notificationsEnabled != 'Y') {
             return false;
@@ -238,6 +256,28 @@ class EquipmentTable extends Entity\DataManager
         ]);
         
         return true;
+    }
+    
+    /**
+     * Metodă pentru a marca toate echipamentele existente ca notificate
+     * Utile când se dezactivează notificările pentru a preveni notificări retroactive
+     */
+    public static function markAllNotificationsAsSent()
+    {
+        $allEquipment = static::getList([
+            'filter' => ['!=NOTIFICATION_SENT' => 'Y'],
+            'select' => ['ID']
+        ])->fetchAll();
+        
+        $count = 0;
+        foreach ($allEquipment as $eq) {
+            try {
+                static::update($eq['ID'], ['NOTIFICATION_SENT' => 'Y']);
+                $count++;
+            } catch (\Exception $e) {}
+        }
+        
+        return $count;
     }
 }
 ?>

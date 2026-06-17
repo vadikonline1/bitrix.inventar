@@ -284,7 +284,7 @@ function updateCustomFields() {
         </tr>
         <tr>
             <td>Purchase cost:</td>
-            <td><input type="text" name="COST_ACHIZITIE" value="<?= htmlspecialchars($equipment['COST_ACHIZITIE'] ?? '') ?>" size="20"> lei</td>
+            <td><input type="text" name="COST_ACHIZITIE" value="<?= htmlspecialchars($equipment['COST_ACHIZITIE'] ?? '') ?>" size="20"></td>
         </tr>
         <tr>
             <td>Warranty expiry:<br><small>(YYYY-MM-DD)</small></td>

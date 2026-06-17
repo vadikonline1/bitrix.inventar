@@ -21,29 +21,36 @@ class bitrix_inventar extends CModule
         $this->MODULE_VERSION_DATE = $arModuleVersion["VERSION_DATE"];
     }
 
-    function DoInstall()
-    {
-        global $APPLICATION;
-        
-        $this->InstallDB();
-        $this->InstallFiles();
-        $this->InstallUserGroup();
-        $this->CreatePublicFolder();
-        
-        // Setează opțiunile default pentru notificări
-        Option::set($this->MODULE_ID, "notification_new_equipment", "Y");
-        Option::set($this->MODULE_ID, "notification_assignment", "Y");
-        Option::set($this->MODULE_ID, "responsible_group_id", 0);
-        
-        ModuleManager::registerModule($this->MODULE_ID);
-        
-        $APPLICATION->IncludeAdminFile(
-            "Installing module " . $this->MODULE_ID,
-            __DIR__ . "/step.php"
-        );
-        
-        return true;
-    }
+	function DoInstall()
+	{
+		global $APPLICATION;
+		
+		$this->InstallDB();
+		$this->InstallFiles();
+		$this->InstallUserGroup();
+		$this->CreatePublicFolder();
+		
+		// Setează opțiunile default pentru notificări
+		Option::set($this->MODULE_ID, "notification_new_equipment", "Y");
+		Option::set($this->MODULE_ID, "notification_assignment", "Y");
+		Option::set($this->MODULE_ID, "responsible_group_id", 0);
+		
+		// Marchează toate echipamentele existente ca notificate (pentru upgrade-uri)
+		if (class_exists('\Bitrix\Inventar\EquipmentTable')) {
+			try {
+				\Bitrix\Inventar\EquipmentTable::markAllNotificationsAsSent();
+			} catch (\Exception $e) {}
+		}
+		
+		ModuleManager::registerModule($this->MODULE_ID);
+		
+		$APPLICATION->IncludeAdminFile(
+			"Installing module " . $this->MODULE_ID,
+			__DIR__ . "/step.php"
+		);
+		
+		return true;
+	}
 
     function DoUninstall()
     {
