@@ -535,11 +535,15 @@ foreach ($list as $arRes) {
     }
     $row->AddViewField("UTILIZATOR", $userName ?: "Not assigned");
     
-    $dataAchizitie = $arRes['DATA_ACHIZITIE'] ? date('d.m.Y', strtotime($arRes['DATA_ACHIZITIE'])) : '-';
-    $row->AddViewField("DATA_ACHIZITIE", $dataAchizitie);
-    
-    $garantie = $arRes['DATA_EXPIRARE_GARANTIE'] ? date('d.m.Y', strtotime($arRes['DATA_EXPIRARE_GARANTIE'])) : '-';
-    $row->AddViewField("DATA_EXPIRARE_GARANTIE", $garantie);
+	$row->AddViewField(
+		"DATA_ACHIZITIE",
+		!empty($arRes['DATA_ACHIZITIE']) ? htmlspecialchars($arRes['DATA_ACHIZITIE']) : '-'
+	);
+
+	$row->AddViewField(
+		"DATA_EXPIRARE_GARANTIE",
+		!empty($arRes['DATA_EXPIRARE_GARANTIE']) ? htmlspecialchars($arRes['DATA_EXPIRARE_GARANTIE']) : '-'
+	);
     
     $stareColor = isset($stareInfo[$arRes['STARE_ENUM']]['color']) ? $stareInfo[$arRes['STARE_ENUM']]['color'] : '#666';
     $stareName = isset($stareInfo[$arRes['STARE_ENUM']]['name']) ? $stareInfo[$arRes['STARE_ENUM']]['name'] : $arRes['STARE_ENUM'];
