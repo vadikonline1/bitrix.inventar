@@ -18,6 +18,85 @@ if ($APPLICATION->GetGroupRight("bitrix.inventar") < "R") {
     $APPLICATION->AuthForm("Access denied");
 }
 
+// ========== FUNCȚIE PENTRU REDIRECȚIONARE SIMPLĂ ==========
+function simpleRedirect() {
+    global $APPLICATION;
+    
+    // Preia toți parametrii GET
+    $params = $_GET;
+    
+    // Elimină parametrii care nu trebuie păstrați
+    unset($params['mode']);
+    unset($params['_']);
+    unset($params['apply']);
+    unset($params['action']);
+    unset($params['mass_edit_value']);
+    unset($params['delete_id']);
+    
+    // Elimină parametrii goi
+    $params = array_filter($params, function($value) {
+        return $value !== '' && $value !== null;
+    });
+    
+    // Asigură-te că page există
+    if (!isset($params['page']) || $params['page'] < 1) {
+        $params['page'] = 1;
+    }
+    
+    $url = $APPLICATION->GetCurPage();
+    if (!empty($params)) {
+        $url .= '?' . http_build_query($params);
+    }
+    
+    // Redirecționează cu JavaScript pentru a forța refresh complet
+    ?>
+    <script>
+        var url = '<?= $url ?>';
+        if (window.top && window.top.location) {
+            window.top.location.href = url;
+        } else if (window.parent && window.parent.location) {
+            window.parent.location.href = url;
+        } else {
+            window.location.href = url;
+        }
+    </script>
+    <?php
+    exit;
+}
+
+// ========== PROCESARE EDITARE ÎN MASĂ ==========
+if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action']) && in_array($_POST['action'], ['edit_type', 'edit_status'])) {
+    if ($APPLICATION->GetGroupRight("bitrix.inventar") >= "W") {
+        if (isset($_POST['ID']) && is_array($_POST['ID']) && count($_POST['ID']) > 0) {
+            $updatedCount = 0;
+            $action = $_POST['action'];
+            $fieldName = ($action == 'edit_type') ? 'TIP_ENUM' : 'STARE_ENUM';
+            $fieldValue = $_POST['mass_edit_value'] ?? '';
+            
+            if (!empty($fieldValue)) {
+                foreach ($_POST['ID'] as $id) {
+                    try {
+                        $updateData = [$fieldName => $fieldValue];
+                        $result = EquipmentTable::update($id, $updateData);
+                        if ($result->isSuccess()) {
+                            $updatedCount++;
+                        }
+                    } catch (Exception $e) {
+                        // Ignore individual errors
+                    }
+                }
+                $fieldLabel = ($action == 'edit_type') ? 'Type' : 'Status';
+                CAdminMessage::ShowMessage("Mass update completed: <strong>{$updatedCount}</strong> records updated successfully! ({$fieldLabel})", "OK");
+            } else {
+                CAdminMessage::ShowMessage("Please select a value for the update!", "ERROR");
+            }
+        } else {
+            CAdminMessage::ShowMessage("No equipment selected for mass edit!", "ERROR");
+        }
+    }
+    simpleRedirect();
+}
+
 // Process individual delete
 if (isset($_GET['delete_id']) && intval($_GET['delete_id']) > 0) {
     $id = intval($_GET['delete_id']);
@@ -25,11 +104,11 @@ if (isset($_GET['delete_id']) && intval($_GET['delete_id']) > 0) {
         EquipmentTable::delete($id);
         CAdminMessage::ShowMessage("Equipment deleted successfully!", "OK");
     }
-    LocalRedirect($APPLICATION->GetCurPage());
+    simpleRedirect();
 }
 
 // Process group delete
-if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action_button']) && $_POST['action_button'] == 'delete') {
+if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action']) && $_POST['action'] == 'delete') {
     if ($APPLICATION->GetGroupRight("bitrix.inventar") >= "W") {
         if (isset($_POST['ID']) && is_array($_POST['ID'])) {
             foreach ($_POST['ID'] as $id) {
@@ -38,7 +117,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action_button']) && $_
             CAdminMessage::ShowMessage("Equipment deleted successfully!", "OK");
         }
     }
-    LocalRedirect($APPLICATION->GetCurPage());
+    simpleRedirect();
 }
 
 // Get types and statuses from database
@@ -53,6 +132,7 @@ $filterLocation = trim($_GET['filter_location'] ?? '');
 $filterDateFrom = trim($_GET['filter_date_from'] ?? '');
 $filterDateTo = trim($_GET['filter_date_to'] ?? '');
 $filterUser = trim($_GET['filter_user'] ?? '');
+$page = isset($_GET['page']) ? intval($_GET['page']) : 1;
 
 // Reset filter
 if (isset($_GET['reset_filter'])) {
@@ -103,7 +183,6 @@ if (!empty($filterUser)) {
 }
 
 // ========== PAGINARE ==========
-$page = isset($_GET['page']) ? intval($_GET['page']) : 1;
 $perPage = 20;
 $offset = ($page - 1) * $perPage;
 
@@ -191,6 +270,33 @@ $arHeaders = [
 $sTableID = "tbl_equipment";
 $lAdmin = new CAdminList($sTableID);
 $lAdmin->AddHeaders($arHeaders);
+
+// ========== CONSTRUIEȘTE URL-UL DE BACK PENTRU EDITARE ==========
+function buildBackUrl() {
+    $params = array_filter([
+        'search' => $_GET['search'] ?? '',
+        'filter_type' => $_GET['filter_type'] ?? '',
+        'filter_status' => $_GET['filter_status'] ?? '',
+        'filter_location' => $_GET['filter_location'] ?? '',
+        'filter_date_from' => $_GET['filter_date_from'] ?? '',
+        'filter_date_to' => $_GET['filter_date_to'] ?? '',
+        'filter_user' => $_GET['filter_user'] ?? '',
+        'page' => $_GET['page'] ?? 1
+    ]);
+    
+    // Adaugă mode dacă există
+    if (isset($_GET['mode']) && $_GET['mode'] == 'frame') {
+        $params['mode'] = 'frame';
+    }
+    
+    if (empty($params)) {
+        return '';
+    }
+    
+    return '&back=' . urlencode(http_build_query($params));
+}
+
+$backParams = buildBackUrl();
 
 // ========== AFIȘARE FILTRU ==========
 ?>
@@ -313,13 +419,11 @@ $lAdmin->AddHeaders($arHeaders);
     
     <form method="GET" id="filterForm">
         <div class="filter-row" id="filterRow">
-            <!-- Search - caută în toate câmpurile -->
             <div class="filter-group" style="flex: 3;">
                 <label>🔍 Search</label>
                 <input type="text" name="search" value="<?= htmlspecialchars($search) ?>" placeholder="Search in: Code, Name, Manufacturer, Model, Serial, Location, Supplier...">
             </div>
             
-            <!-- Type -->
             <div class="filter-group">
                 <label>📁 Type</label>
                 <select name="filter_type">
@@ -330,7 +434,6 @@ $lAdmin->AddHeaders($arHeaders);
                 </select>
             </div>
             
-            <!-- Status -->
             <div class="filter-group">
                 <label>⚙️ Status</label>
                 <select name="filter_status">
@@ -343,7 +446,6 @@ $lAdmin->AddHeaders($arHeaders);
         </div>
         
         <div class="filter-row" id="filterRow2" style="margin-top: 8px;">
-            <!-- Location -->
             <div class="filter-group">
                 <label>📍 Location</label>
                 <select name="filter_location">
@@ -354,7 +456,6 @@ $lAdmin->AddHeaders($arHeaders);
                 </select>
             </div>
             
-            <!-- Responsible User -->
             <div class="filter-group">
                 <label>👤 Responsible user</label>
                 <select name="filter_user">
@@ -365,26 +466,22 @@ $lAdmin->AddHeaders($arHeaders);
                 </select>
             </div>
             
-            <!-- Purchase date from -->
             <div class="filter-group">
                 <label>📅 Purchase date from</label>
                 <input type="date" name="filter_date_from" value="<?= htmlspecialchars($filterDateFrom) ?>">
             </div>
             
-            <!-- Purchase date to -->
             <div class="filter-group">
                 <label>📅 Purchase date to</label>
                 <input type="date" name="filter_date_to" value="<?= htmlspecialchars($filterDateTo) ?>">
             </div>
             
-            <!-- Actions -->
             <div class="filter-actions">
                 <button type="submit" class="btn-filter">🔍 Filter</button>
                 <a href="?reset_filter=1" class="btn-reset">✖ Reset</a>
             </div>
         </div>
         
-        <!-- Hidden page parameter -->
         <input type="hidden" name="page" value="1">
     </form>
 </div>
@@ -402,7 +499,6 @@ function toggleFilter() {
     toggleText.textContent = isHidden ? 'Hide filters' : 'Show filters';
 }
 
-// Auto-submit filter on Enter key
 document.addEventListener("DOMContentLoaded", function() {
     document.querySelectorAll("#filterForm input, #filterForm select").forEach(function(el) {
         el.addEventListener("keypress", function(e) {
@@ -430,7 +526,6 @@ foreach ($list as $arRes) {
     $f_ID = $arRes['ID'];
     $row = $lAdmin->AddRow($f_ID, $arRes);
     
-    // Get current user
     $userId = AllocationTable::getCurrentUserForEquipment($f_ID);
     $userName = '';
     if ($userId) {
@@ -440,31 +535,27 @@ foreach ($list as $arRes) {
     }
     $row->AddViewField("UTILIZATOR", $userName ?: "Not assigned");
     
-    // Format dates
     $dataAchizitie = $arRes['DATA_ACHIZITIE'] ? date('d.m.Y', strtotime($arRes['DATA_ACHIZITIE'])) : '-';
     $row->AddViewField("DATA_ACHIZITIE", $dataAchizitie);
     
     $garantie = $arRes['DATA_EXPIRARE_GARANTIE'] ? date('d.m.Y', strtotime($arRes['DATA_EXPIRARE_GARANTIE'])) : '-';
     $row->AddViewField("DATA_EXPIRARE_GARANTIE", $garantie);
     
-    // Status styling
     $stareColor = isset($stareInfo[$arRes['STARE_ENUM']]['color']) ? $stareInfo[$arRes['STARE_ENUM']]['color'] : '#666';
     $stareName = isset($stareInfo[$arRes['STARE_ENUM']]['name']) ? $stareInfo[$arRes['STARE_ENUM']]['name'] : $arRes['STARE_ENUM'];
     $row->AddViewField("STARE_ENUM", '<span style="color:' . $stareColor . '; font-weight:bold;">' . htmlspecialchars($stareName) . '</span>');
     
-    // Type display
     $tipName = isset($tipText[$arRes['TIP_ENUM']]) ? $tipText[$arRes['TIP_ENUM']] : $arRes['TIP_ENUM'];
     $row->AddViewField("TIP_ENUM", htmlspecialchars($tipName));
     
-    // Manufacturer and model
     $row->AddViewField("PRODUCATOR", htmlspecialchars(!empty($arRes['PRODUCATOR']) ? $arRes['PRODUCATOR'] : '-'));
     $row->AddViewField("MODEL", htmlspecialchars(!empty($arRes['MODEL']) ? $arRes['MODEL'] : '-'));
     $row->AddViewField("SERIAL_NR", htmlspecialchars(!empty($arRes['SERIAL_NR']) ? $arRes['SERIAL_NR'] : '-'));
     $row->AddViewField("LOCATIE", htmlspecialchars(!empty($arRes['LOCATIE']) ? $arRes['LOCATIE'] : '-'));
     
-    // Actions
+    $editUrl = "/bitrix/admin/bitrix_inventar_equipment_edit.php?ID=" . $f_ID . $backParams;
     $row->AddActions([
-        ["ICON" => "edit", "TEXT" => "Edit", "ACTION" => $lAdmin->ActionRedirect("/bitrix/admin/bitrix_inventar_equipment_edit.php?ID=" . $f_ID), "DEFAULT" => true],
+        ["ICON" => "edit", "TEXT" => "Edit", "ACTION" => $lAdmin->ActionRedirect($editUrl), "DEFAULT" => true],
         ["ICON" => "delete", "TEXT" => "Delete", "ACTION" => "if(confirm('Are you sure you want to delete this equipment?')) window.location.href='?delete_id=" . $f_ID . "';"]
     ]);
 }
@@ -475,9 +566,18 @@ $lAdmin->AddFooter([
     ["title" => "Actions", "value" => "delete"]
 ]);
 
-$lAdmin->AddGroupActionTable([
+// ========== ACȚIUNI DE GRUP ==========
+$arGroupActions = [
     "delete" => "Delete selected"
-]);
+];
+
+// Adaugă acțiunile de editare în masă
+if ($APPLICATION->GetGroupRight("bitrix.inventar") >= "W") {
+    $arGroupActions["edit_type"] = "Edit Type";
+    $arGroupActions["edit_status"] = "Edit Status";
+}
+
+$lAdmin->AddGroupActionTable($arGroupActions);
 
 $lAdmin->CheckListMode();
 $lAdmin->DisplayList();
@@ -493,6 +593,11 @@ function buildFilterUrl($params = []) {
         'filter_date_to' => $_GET['filter_date_to'] ?? '',
         'filter_user' => $_GET['filter_user'] ?? ''
     ]);
+    
+    // Adaugă mode dacă există
+    if (isset($_GET['mode']) && $_GET['mode'] == 'frame') {
+        $baseParams['mode'] = 'frame';
+    }
     
     $finalParams = array_merge($baseParams, $params);
     return '?' . http_build_query(array_filter($finalParams));
@@ -537,20 +642,194 @@ if ($totalPages > 1) {
 }
 
 // Additional buttons
+$addUrl = "/bitrix/admin/bitrix_inventar_equipment_edit.php" . ($backParams ? '?' . ltrim($backParams, '&') : '');
 echo '<br><br>';
-echo '<a href="/bitrix/admin/bitrix_inventar_equipment_edit.php" class="adm-btn">+ Add new equipment</a>';
+echo '<a href="' . $addUrl . '" class="adm-btn">+ Add new equipment</a>';
 echo '&nbsp;&nbsp;<a href="/bitrix/admin/bitrix_inventar_types_status.php" class="adm-btn">⚙️ Manage Types & Statuses</a>';
 echo '&nbsp;&nbsp;<a href="/bitrix/admin/bitrix_inventar_allocations.php" class="adm-btn">📋 Allocations</a>';
 echo '&nbsp;&nbsp;<a href="/bitrix/admin/bitrix_inventar_service.php" class="adm-btn">🔧 Service</a>';
 
-echo '<script>
-document.addEventListener("DOMContentLoaded", function() {
-    var form = document.getElementById("form_tbl_equipment");
-    if (form) {
-        form.action = window.location.href;
-    }
-});
-</script>';
+// ========== JAVASCRIPT PENTRU EDITARE ÎN MASĂ ==========
+$tipOptionsJson = [];
+foreach ($tipText as $key => $value) {
+    $tipOptionsJson[] = ['value' => $key, 'label' => addslashes($value)];
+}
 
+$statusOptionsJson = [];
+foreach ($stareInfo as $key => $info) {
+    $statusOptionsJson[] = ['value' => $key, 'label' => addslashes($info['name'])];
+}
+?>
+
+<script>
+var tipOptions = <?= json_encode($tipOptionsJson) ?>;
+var statusOptions = <?= json_encode($statusOptionsJson) ?>;
+
+// Funcție pentru inițializarea dropdown-urilor
+function initMassEdit() {
+    // Găsim dropdown-ul de acțiuni - name="action"
+    var actionSelect = document.querySelector("select[name='action']");
+    if (!actionSelect) {
+        actionSelect = document.getElementById("tbl_equipment_action");
+    }
+    
+    if (actionSelect) {
+        var footer = document.getElementById("tbl_equipment_footer");
+        if (!footer) {
+            footer = document.querySelector(".adm-list-table-footer");
+        }
+        
+        if (footer) {
+            var applySpan = footer.querySelector(".adm-table-action-button");
+            if (!applySpan) {
+                applySpan = footer.querySelector("input[name='apply']");
+                if (applySpan) {
+                    applySpan = applySpan.parentNode;
+                }
+            }
+            
+            if (applySpan) {
+                // Verificăm dacă containerul există deja
+                var existingContainer = footer.querySelector(".mass-edit-fields");
+                if (existingContainer) {
+                    existingContainer.remove();
+                }
+                
+                var container = document.createElement("span");
+                container.className = "mass-edit-fields";
+                container.style.cssText = "display: none; margin-left: 10px;";
+                
+                var valueSelect = document.createElement("select");
+                valueSelect.name = "mass_edit_value";
+                valueSelect.style.cssText = "padding: 3px 8px; height: 28px; min-width: 150px; border: 1px solid #ccc; border-radius: 4px; background: #fff;";
+                valueSelect.innerHTML = '<option value="">Select value...</option>';
+                
+                container.appendChild(valueSelect);
+                applySpan.parentNode.insertBefore(container, applySpan);
+                
+                // Eliminăm event listener-urile vechi
+                actionSelect.removeEventListener('change', handleActionChange);
+                // Adăugăm event listener nou
+                actionSelect.addEventListener('change', handleActionChange);
+                
+                // Salvăm referințe pentru handler
+                window._massEditValueSelect = valueSelect;
+                window._massEditContainer = container;
+                
+                // Verificăm dacă acțiunea curentă este edit_type sau edit_status
+                var currentAction = actionSelect.value;
+                if (currentAction === "edit_type" || currentAction === "edit_status") {
+                    // Trigger pentru a afișa dropdown-ul
+                    handleActionChange();
+                }
+            }
+        }
+    }
+}
+
+// Handler pentru schimbarea acțiunii
+function handleActionChange() {
+    var actionSelect = document.querySelector("select[name='action']") || document.getElementById("tbl_equipment_action");
+    var action = actionSelect ? actionSelect.value : '';
+    var valueSelect = window._massEditValueSelect;
+    var container = window._massEditContainer;
+    
+    if (!valueSelect || !container) return;
+    
+    valueSelect.innerHTML = '<option value="">Select value...</option>';
+    
+    var options = [];
+    if (action === "edit_type") {
+        options = tipOptions;
+    } else if (action === "edit_status") {
+        options = statusOptions;
+    }
+    
+    if (action === "edit_type" || action === "edit_status") {
+        container.style.display = "inline";
+        options.forEach(function(opt) {
+            var option = document.createElement("option");
+            option.value = opt.value;
+            option.textContent = opt.label;
+            valueSelect.appendChild(option);
+        });
+    } else {
+        container.style.display = "none";
+    }
+}
+
+// Funcție de inițializare completă
+function fullInit() {
+    // Inițializare dropdown-uri
+    initMassEdit();
+    
+    // Auto-submit filter on Enter key
+    document.querySelectorAll("#filterForm input, #filterForm select").forEach(function(el) {
+        el.addEventListener("keypress", function(e) {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                document.getElementById("filterForm").submit();
+            }
+        });
+    });
+}
+
+// Inițializare la încărcarea paginii
+if (document.readyState === 'loading') {
+    document.addEventListener("DOMContentLoaded", function() {
+        setTimeout(fullInit, 200);
+    });
+} else {
+    // Pagina este deja încărcată
+    setTimeout(fullInit, 200);
+}
+
+// Pentru cazul în care pagina este reîncărcată parțial prin AJAX (iframe mode)
+// Ascultăm evenimentele de reîncărcare
+if (window.BX && window.BX.ajax) {
+    // Folosim un MutationObserver pentru a detecta schimbările în DOM
+    var observer = new MutationObserver(function(mutations) {
+        // Verificăm dacă footer-ul a fost modificat
+        var footer = document.getElementById("tbl_equipment_footer");
+        if (footer) {
+            // Verificăm dacă dropdown-urile noastre există
+            var container = footer.querySelector(".mass-edit-fields");
+            if (!container) {
+                // Dacă nu există, le recreăm
+                initMassEdit();
+            }
+        }
+    });
+    
+    // Observăm întregul document pentru schimbări
+    observer.observe(document.body, {
+        childList: true,
+        subtree: true
+    });
+}
+
+// Reinițializare după orice refresh (pentru cazul în care DOM-ul se schimbă)
+setTimeout(function() {
+    initMassEdit();
+}, 1000);
+
+// Pentru cazul în care se folosește BX.ajax.submitComponentForm
+// Suprascriem funcția de callback pentru a reinițializa după submit
+if (window.BX && window.BX.ajax) {
+    var originalSubmit = BX.ajax.submitComponentForm;
+    if (originalSubmit) {
+        BX.ajax.submitComponentForm = function(form, container, bReturn) {
+            var result = originalSubmit.call(this, form, container, bReturn);
+            // După submit, reinițializăm
+            setTimeout(function() {
+                initMassEdit();
+            }, 500);
+            return result;
+        };
+    }
+}
+</script>
+
+<?php
 require($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/epilog_admin.php");
 ?>
