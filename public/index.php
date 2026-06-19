@@ -179,7 +179,7 @@ if ($id) {
                                 $userName = trim($user['NAME'] . ' ' . $user['LAST_NAME']) ?: $user['LOGIN'];
                                 $isActive = empty($alloc['DATA_RETURNARE']);
                             ?>
-                            <tr><td><?= $alloc['ID'] ?></td><td><?= htmlspecialchars($userName) ?></td><td><?= date('d.m.Y', strtotime($alloc['DATA_PREDARE'])) ?></td><td><?= $alloc['DATA_RETURNARE'] ? date('d.m.Y', strtotime($alloc['DATA_RETURNARE'])) : '-' ?></td><td><?= htmlspecialchars($alloc['MOTIV_RETURNARE'] ?: '-') ?></td><td><?php if ($isActive): ?><span class="status-active">● Active</span><?php else: ?><span class="status-closed">Closed</span><?php endif; ?></td></tr>
+                            <tr><td><?= $alloc['ID'] ?></td><td><?= htmlspecialchars($userName) ?></td><td><?= $alloc['DATA_PREDARE'] ?></td><td><?= $alloc['DATA_RETURNARE'] ? date('d.m.Y', strtotime($alloc['DATA_RETURNARE'])) : '-' ?></td><td><?= htmlspecialchars($alloc['MOTIV_RETURNARE'] ?: '-') ?></td><td><?php if ($isActive): ?><span class="status-active">● Active</span><?php else: ?><span class="status-closed">Closed</span><?php endif; ?></td></tr>
                             <?php endforeach; ?>
                         </tbody>
                     </table>

@@ -73,7 +73,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['save'])) {
         'FURNIZOR' => $_POST['FURNIZOR'] ?? '',
         'COST_ACHIZITIE' => (!empty($_POST['COST_ACHIZITIE']) && is_numeric($_POST['COST_ACHIZITIE'])) ? floatval($_POST['COST_ACHIZITIE']) : null,
         'DATA_EXPIRARE_GARANTIE' => $dataExpirare,
-        'STARE_ENUM' => $_POST['STARE_ENUM'] ?? 'in_stock',
+        'STARE_ENUM' => $_POST['STARE_ENUM'] ?? '2',
         'LOCATIE' => $_POST['LOCATIE'] ?? '',
         'CONTRACT_SERVICE' => $_POST['CONTRACT_SERVICE'] ?? ''
     ];
@@ -116,6 +116,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['save'])) {
             
             // ========== AUTO ALLOCATION WHEN RESPONSIBLE USER IS SELECTED ==========
             $selectedUserId = intval($_POST['RESPONSIBLE_USER'] ?? 0);
+            $currentDate = new Date(); // Data curentă
             
             if ($ID && $selectedUserId > 0) {
                 $currentAlloc = AllocationTable::getList([
@@ -125,24 +126,31 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['save'])) {
                 
                 if ($currentAlloc) {
                     if ($currentAlloc['USER_ID'] != $selectedUserId) {
+                        // Închide alocarea veche
                         AllocationTable::update($currentAlloc['ID'], [
-                            'DATA_RETURNARE' => new Date(),
+                            'DATA_RETURNARE' => $currentDate,
                             'MOTIV_RETURNARE' => 'Responsible person changed'
                         ]);
-                        AllocationTable::add([
+                        // Adaugă alocare nouă cu data curentă
+                        $allocResult = AllocationTable::add([
                             'EQUIPMENT_ID' => $ID,
                             'USER_ID' => $selectedUserId,
-                            'DATA_PREDARE' => new Date()
+                            'DATA_PREDARE' => $currentDate
                         ]);
-                        EquipmentTable::update($ID, ['STARE_ENUM' => 'in_use']);
+                        if ($allocResult->isSuccess()) {
+                            EquipmentTable::update($ID, ['STARE_ENUM' => '1']); // 1 = In use
+                        }
                     }
                 } else {
-                    AllocationTable::add([
+                    // Adaugă alocare nouă cu data curentă
+                    $allocResult = AllocationTable::add([
                         'EQUIPMENT_ID' => $ID,
                         'USER_ID' => $selectedUserId,
-                        'DATA_PREDARE' => new Date()
+                        'DATA_PREDARE' => $currentDate
                     ]);
-                    EquipmentTable::update($ID, ['STARE_ENUM' => 'in_use']);
+                    if ($allocResult->isSuccess()) {
+                        EquipmentTable::update($ID, ['STARE_ENUM' => '1']); // 1 = In use
+                    }
                 }
             } elseif ($ID && $selectedUserId == 0) {
                 $currentAlloc = AllocationTable::getList([
@@ -151,10 +159,10 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['save'])) {
                 ])->fetch();
                 if ($currentAlloc) {
                     AllocationTable::update($currentAlloc['ID'], [
-                        'DATA_RETURNARE' => new Date(),
+                        'DATA_RETURNARE' => $currentDate,
                         'MOTIV_RETURNARE' => 'Released'
                     ]);
-                    EquipmentTable::update($ID, ['STARE_ENUM' => 'in_stock']);
+                    EquipmentTable::update($ID, ['STARE_ENUM' => '2']); // 2 = In stock
                 }
             }
             
@@ -209,6 +217,10 @@ if ($responsibleGroupId) {
         if (empty($arUsers[$user['ID']])) $arUsers[$user['ID']] = $user['LOGIN'];
     }
 }
+
+// Get current date for display
+$currentDate = date('d.m.Y');
+$currentDateFormatted = date('Y-m-d');
 ?>
 
 <script>
@@ -238,6 +250,29 @@ function updateCustomFields() {
     var tip = document.getElementById('tip_selector').value;
     var currentId = <?= $ID ?> || 0;
     window.location.href = '?ID=' + currentId + '&tip=' + tip;
+}
+
+function updateAllocationInfo() {
+    var select = document.getElementById('responsible_user');
+    var infoDiv = document.getElementById('allocation_info');
+    var selectedUser = select.options[select.selectedIndex];
+    var userName = selectedUser.text;
+    var userId = select.value;
+    var currentDate = '<?= $currentDate ?>';
+    
+    if (userId > 0) {
+        infoDiv.innerHTML = '<div style="background: #e8f5e9; padding: 10px 15px; border-radius: 6px; margin-top: 8px; border-left: 4px solid #4CAF50;">' +
+            '✅ <strong>Allocation will be created:</strong> ' + userName + 
+            ' will be assigned on <strong>' + currentDate + '</strong>' +
+            ' (handover date: today)' +
+            '</div>';
+        infoDiv.style.display = 'block';
+    } else {
+        infoDiv.innerHTML = '<div style="background: #fff3e0; padding: 10px 15px; border-radius: 6px; margin-top: 8px; border-left: 4px solid #FF9800;">' +
+            '⚠️ <strong>No allocation:</strong> No responsible user selected. Equipment will remain <strong>In stock</strong>.' +
+            '</div>';
+        infoDiv.style.display = 'block';
+    }
 }
 </script>
 
@@ -345,16 +380,38 @@ function updateCustomFields() {
         <small>You can add custom fields in the "Additional Fields" section from the main menu.</small></td></tr>
         <?php endif; ?>
         
-        <tr style="background:#f0f7ff;">
+        <tr style="background:#f0f7ff; border-top: 2px solid #2c7ed6;">
             <td><span style="color:red;">*</span> Responsible person:</td>
             <td>
-                <select name="RESPONSIBLE_USER" style="min-width:250px;">
+                <select name="RESPONSIBLE_USER" id="responsible_user" style="min-width:250px;" onchange="updateAllocationInfo()">
                     <option value="0">- None -</option>
                     <?php foreach ($arUsers as $uid => $uname): ?>
                     <option value="<?= $uid ?>" <?= ($currentUserId == $uid) ? 'selected' : '' ?>><?= htmlspecialchars($uname) ?></option>
                     <?php endforeach; ?>
                 </select>
-                <br><small>Select the responsible user - an allocation will be automatically created</small>
+                <br><small>Select the responsible user - an allocation will be automatically created with today's date</small>
+                
+                <!-- Informații alocare -->
+                <div id="allocation_info" style="margin-top: 10px;">
+                    <?php if ($currentUserId > 0): ?>
+                    <div style="background: #e8f5e9; padding: 10px 15px; border-radius: 6px; border-left: 4px solid #4CAF50;">
+                        ✅ <strong>Current allocation:</strong> 
+                        <?php 
+                        $userName = $arUsers[$currentUserId] ?? 'Unknown';
+                        echo htmlspecialchars($userName) . ' assigned on <strong>' . $currentDate . '</strong>';
+                        ?>
+                    </div>
+                    <?php else: ?>
+                    <div style="background: #fff3e0; padding: 10px 15px; border-radius: 6px; border-left: 4px solid #FF9800;">
+                        ⚠️ <strong>No allocation:</strong> Equipment is currently <strong>In stock</strong>
+                    </div>
+                    <?php endif; ?>
+                </div>
+                
+                <!-- Data curentă afișată pentru informare -->
+                <div style="margin-top: 8px; font-size: 12px; color: #666; background: #f5f5f5; padding: 5px 10px; border-radius: 4px;">
+                    📅 Today's date: <strong><?= $currentDate ?></strong> (<?= $currentDateFormatted ?>)
+                </div>
             </td>
         </tr>
     </table>
@@ -362,5 +419,12 @@ function updateCustomFields() {
     <input type="submit" name="save" value="Save" class="adm-btn-save">
     <a href="/bitrix/admin/bitrix_inventar_equipment_list.php" class="adm-btn">Cancel</a>
 </form>
+
+<script>
+// Inițializează informațiile de alocare la încărcare
+document.addEventListener('DOMContentLoaded', function() {
+    updateAllocationInfo();
+});
+</script>
 
 <?php require($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/epilog_admin.php"); ?>
