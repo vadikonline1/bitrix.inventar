@@ -188,25 +188,62 @@ class bitrix_inventar extends CModule
         return true;
     }
     
-    function CreatePublicFolder()
-    {
-        $publicPath = $_SERVER["DOCUMENT_ROOT"] . "/inventar";
-        
-        if (!is_dir($publicPath)) {
-            mkdir($publicPath, 0755, true);
-        }
-        
-        mkdir($publicPath . "/all", 0755, true);
-        mkdir($publicPath . "/add", 0755, true);
-        mkdir($publicPath . "/edit", 0755, true);
-        
-        $this->copyFileIfExists(__DIR__ . "/../public/index.php", $publicPath . "/index.php");
-        $this->copyFileIfExists(__DIR__ . "/../public/all/index.php", $publicPath . "/all/index.php");
-        $this->copyFileIfExists(__DIR__ . "/../public/add/index.php", $publicPath . "/add/index.php");
-        $this->copyFileIfExists(__DIR__ . "/../public/edit/index.php", $publicPath . "/edit/index.php");
-        
-        return true;
-    }
+	function CreatePublicFolder()
+	{
+	    $publicPath = $_SERVER["DOCUMENT_ROOT"] . "/inventar";
+	    
+	    // Creează directoarele
+	    if (!is_dir($publicPath)) {
+	        mkdir($publicPath, 0755, true);
+	    }
+	    mkdir($publicPath . "/all", 0755, true);
+	    mkdir($publicPath . "/add", 0755, true);
+	    mkdir($publicPath . "/edit", 0755, true);
+	    
+	    // Definim paginile care trebuie create ca stub
+	    $pages = [
+	        'index' => 'index.php',
+	        'all' => 'all/index.php',
+	        'add' => 'add/index.php',
+	        'edit' => 'edit/index.php'
+	    ];
+	    
+	    $createdCount = 0;
+	    $failedFiles = [];
+	    
+	    foreach ($pages as $pageName => $filePath) {
+	        // Conținutul stub-ului
+	        $stubContent = '<?php
+	// Stub file for public page - ' . $pageName . '
+	// This file includes the actual implementation from the module
+	require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/bitrix.inventar/public/' . $filePath . '");
+	?>';
+	        
+	        $stubFile = $publicPath . '/' . $filePath;
+	        
+	        // Asigură-te că directorul există pentru calea fișierului
+	        $dirPath = dirname($stubFile);
+	        if (!is_dir($dirPath)) {
+	            mkdir($dirPath, 0755, true);
+	        }
+	        
+	        // Scrie fișierul stub
+	        if (file_put_contents($stubFile, $stubContent)) {
+	            chmod($stubFile, 0644);
+	            $createdCount++;
+	        } else {
+	            $failedFiles[] = $filePath;
+	        }
+	    }
+	    
+	    // Log pentru debugging (opțional)
+	    if (!empty($failedFiles)) {
+	        // Poți adăuga un mesaj de eroare dacă dorești
+	        AddMessage2Log("Failed to create public stub files: " . implode(", ", $failedFiles), "bitrix.inventar");
+	    }
+	    
+	    return true;
+	}
     
     function copyFileIfExists($source, $dest)
     {
