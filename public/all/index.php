@@ -4,6 +4,7 @@ require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_befo
 use Bitrix\Main\Loader;
 use Bitrix\Main\Config\Option;
 use Bitrix\Main\Type\Date;
+use Bitrix\Main\Type\DateTime;
 use Bitrix\Inventar\EquipmentTable;
 use Bitrix\Inventar\AllocationTable;
 use Bitrix\Inventar\TypesTable;
@@ -22,6 +23,147 @@ if (!$isInventarUser) {
     echo "Access denied. You are not a member of the Inventory group."; 
     require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php"); 
     exit; 
+}
+
+// ========== EXPORT CSV ==========
+if (isset($_GET['export']) && $_GET['export'] == 'excel') {
+    while (ob_get_level()) ob_end_clean();
+    
+    header('Content-Type: text/csv; charset=UTF-8');
+    header('Content-Disposition: attachment; filename="inventory_equipment_' . date('Y-m-d') . '.csv"');
+    header('Cache-Control: must-revalidate, post-check=0, pre-check=0');
+    header('Pragma: public');
+    
+    // Obține toate echipamentele
+    $equipmentList = EquipmentTable::getList([
+        'order' => ['ID' => 'DESC']
+    ])->fetchAll();
+    
+    // Obține tipurile și stările
+    $tipuri = TypesTable::getAllTypes();
+    $stari = StatusTable::getAllStatus();
+    
+    // Obține utilizatorii pentru fiecare echipament
+    $allocationMap = [];
+    foreach ($equipmentList as $eq) {
+        $userId = AllocationTable::getCurrentUserForEquipment($eq['ID']);
+        if ($userId) {
+            $user = \Bitrix\Main\UserTable::getById($userId)->fetch();
+            $userName = trim($user['NAME'] . ' ' . $user['LAST_NAME']);
+            if (empty($userName)) $userName = $user['LOGIN'];
+            $allocationMap[$eq['ID']] = $userName;
+        } else {
+            $allocationMap[$eq['ID']] = '';
+        }
+    }
+    
+    // Construiește header-ul
+    $headers = [
+        'ID',
+        'Inventory code',
+        'Name',
+        'Type',
+        'Type Name',
+        'Manufacturer',
+        'Model',
+        'Serial number',
+        'Purchase date',
+        'Supplier',
+        'Purchase cost',
+        'Warranty expiry',
+        'Status',
+        'Status Name',
+        'Location',
+        'Service contract',
+        'Assigned user'
+    ];
+    
+    // Adaugă câmpuri personalizate la header
+    $customHeaders = [];
+    $allCustomFields = [];
+    foreach ($equipmentList as $eq) {
+        if (!empty($eq['OTHERS_INFO'])) {
+            $customData = json_decode($eq['OTHERS_INFO'], true);
+            if (is_array($customData)) {
+                foreach ($customData as $key => $value) {
+                    $fieldName = str_replace('CUSTOM_', '', $key);
+                    $fieldName = str_replace('_', ' ', $fieldName);
+                    $fieldName = ucwords($fieldName);
+                    if (!in_array($fieldName, $customHeaders)) {
+                        $customHeaders[] = $fieldName;
+                        $allCustomFields[$key] = $fieldName;
+                    }
+                }
+            }
+        }
+    }
+    
+    $headers = array_merge($headers, $customHeaders);
+    
+    // Afișează header-ul
+    $output = fopen('php://output', 'w');
+    fputcsv($output, $headers);
+    
+    // Exportă datele
+    foreach ($equipmentList as $item) {
+        $row = [];
+        
+        // Date de bază
+        $row[] = $item['ID'];
+        $row[] = $item['COD_INVENTAR'];
+        $row[] = $item['DENUMIRE'];
+        $row[] = $item['TIP_ENUM'];
+        $row[] = $tipuri[$item['TIP_ENUM']] ?? $item['TIP_ENUM'];
+        $row[] = $item['PRODUCATOR'] ?? '';
+        $row[] = $item['MODEL'] ?? '';
+        $row[] = $item['SERIAL_NR'] ?? '';
+        
+        // Date
+        $dataAchizitie = '';
+        if (!empty($item['DATA_ACHIZITIE'])) {
+            if ($item['DATA_ACHIZITIE'] instanceof Date) {
+                $dataAchizitie = $item['DATA_ACHIZITIE']->format('Y-m-d');
+            } else {
+                $dataAchizitie = date('Y-m-d', strtotime($item['DATA_ACHIZITIE']));
+            }
+        }
+        $row[] = $dataAchizitie;
+        
+        $row[] = $item['FURNIZOR'] ?? '';
+        $row[] = $item['COST_ACHIZITIE'] ?? '';
+        
+        $dataExpirare = '';
+        if (!empty($item['DATA_EXPIRARE_GARANTIE'])) {
+            if ($item['DATA_EXPIRARE_GARANTIE'] instanceof Date) {
+                $dataExpirare = $item['DATA_EXPIRARE_GARANTIE']->format('Y-m-d');
+            } else {
+                $dataExpirare = date('Y-m-d', strtotime($item['DATA_EXPIRARE_GARANTIE']));
+            }
+        }
+        $row[] = $dataExpirare;
+        
+        $row[] = $item['STARE_ENUM'];
+        $row[] = $stari[$item['STARE_ENUM']]['name'] ?? $item['STARE_ENUM'];
+        $row[] = $item['LOCATIE'] ?? '';
+        $row[] = $item['CONTRACT_SERVICE'] ?? '';
+        $row[] = $allocationMap[$item['ID']] ?? '';
+        
+        // Câmpuri personalizate
+        $customData = [];
+        if (!empty($item['OTHERS_INFO'])) {
+            $customData = json_decode($item['OTHERS_INFO'], true);
+            if (!is_array($customData)) $customData = [];
+        }
+        
+        foreach ($allCustomFields as $key => $fieldName) {
+            $row[] = $customData[$key] ?? '';
+        }
+        
+        fputcsv($output, $row);
+    }
+    
+    fclose($output);
+    exit;
 }
 
 $APPLICATION->SetTitle("IT Inventory - All Equipment");
@@ -102,6 +244,17 @@ $totalPages = ceil($total / $perPage);
 
 $sql .= " ORDER BY e.ID DESC LIMIT {$offset}, {$perPage}";
 $list = $connection->query($sql)->fetchAll();
+
+// Construiește URL-ul de export cu filtrele active
+$exportParams = array_filter([
+    'export' => 'excel',
+    'search' => $search,
+    'filter_tip' => $filterTip,
+    'filter_status' => $filterStatus,
+    'filter_locatie' => $filterLocatie,
+    'filter_responsabil' => $filterResponsabil
+]);
+$exportUrl = '?' . http_build_query($exportParams);
 ?>
 
 <style>
@@ -119,7 +272,10 @@ $list = $connection->query($sql)->fetchAll();
 .filter-actions { display: flex; gap: 10px; align-items: center; }
 .btn-filter { background: #2c7ed6; color: white; border: none; padding: 8px 20px; border-radius: 6px; cursor: pointer; }
 .btn-reset { background: #999; color: white; border: none; padding: 8px 20px; border-radius: 6px; cursor: pointer; text-decoration: none; }
-.btn-add { background: #4CAF50; color: white; padding: 8px 16px; text-decoration: none; border-radius: 6px; margin-left: 15px; font-size: 14px; }
+.btn-add { background: #4CAF50; color: white; padding: 8px 16px; text-decoration: none; border-radius: 6px; font-size: 14px; }
+.btn-export { background: #ff9800; color: white; padding: 8px 16px; text-decoration: none; border-radius: 6px; font-size: 14px; margin-left: 10px; display: inline-flex; align-items: center; gap: 5px; }
+.btn-export:hover { background: #f57c00; }
+.title-buttons { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
 .table-view { display: block; overflow-x: auto; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
 .equipment-table { width: 100%; border-collapse: collapse; background: white; font-size: 13px; }
 .equipment-table th, .equipment-table td { padding: 12px 10px; text-align: left; border-bottom: 1px solid #eee; }
@@ -143,7 +299,7 @@ $list = $connection->query($sql)->fetchAll();
 .pagination a, .pagination span { padding: 8px 15px; background: #f0f0f0; text-decoration: none; color: #333; border-radius: 6px; }
 .pagination .active { background: #2c7ed6; color: white; }
 .empty-state { text-align: center; padding: 60px; color: #999; background: white; border-radius: 12px; }
-@media (max-width: 768px) { .table-view { display: none; } .card-view { display: flex; } .inventar-title { flex-direction: column; text-align: center; } .filter-row { flex-direction: column; } .filter-group { width: 100%; } .filter-actions { justify-content: center; } .nav-links { justify-content: center; } .card-row { flex-direction: column; } .card-row .label { width: 100%; margin-bottom: 4px; } .card-footer { flex-wrap: wrap; } .btn { flex: 1; text-align: center; } }
+@media (max-width: 768px) { .table-view { display: none; } .card-view { display: flex; } .inventar-title { flex-direction: column; text-align: center; } .filter-row { flex-direction: column; } .filter-group { width: 100%; } .filter-actions { justify-content: center; } .nav-links { justify-content: center; } .card-row { flex-direction: column; } .card-row .label { width: 100%; margin-bottom: 4px; } .card-footer { flex-wrap: wrap; } .btn { flex: 1; text-align: center; } .title-buttons { justify-content: center; width: 100%; } }
 </style>
 
 <div class="inventar-container">
@@ -154,15 +310,16 @@ $list = $connection->query($sql)->fetchAll();
     
     <div class="inventar-title">
         <span>📊 All IT Equipment</span>
-        <div>
+        <div class="title-buttons">
             <a href="/inventar/add/" class="btn-add">+ Add</a>
+            <a href="<?= $exportUrl ?>" class="btn-export">📎 Export</a>
             <span class="count-badge">Total: <?= $total ?> equipment</span>
         </div>
     </div>
     
     <form method="GET" class="filter-bar">
         <div class="filter-row">
-            <div class="filter-group" style="flex:2;"><label>🔍 Search (code, name, serial)</label><input type="text" name="search" value="<?= htmlspecialchars($search) ?>" placeholder="Search..." style="width: -webkit-fill-available;"></div>
+            <div class="filter-group" style="flex:2;"><label>🔍 Search (code, name, serial)</label><input type="text" name="search" value="<?= htmlspecialchars($search) ?>" placeholder="Search..." style="width: 95%;"></div>
             <div class="filter-group"><label>📁 Type</label><select name="filter_tip"><option value="">All</option><?php foreach ($allTipuri as $val => $name): ?><option value="<?= $val ?>" <?= ($filterTip == $val) ? 'selected' : '' ?>><?= htmlspecialchars($name) ?></option><?php endforeach; ?></select></div>
             <div class="filter-group"><label>📍 Location</label><select name="filter_locatie"><option value="">All</option><?php foreach ($allLocatii as $loc): ?><option value="<?= htmlspecialchars($loc) ?>" <?= ($filterLocatie == $loc) ? 'selected' : '' ?>><?= htmlspecialchars($loc) ?></option><?php endforeach; ?></select></div>
             <div class="filter-group"><label>⚙️ Status</label><select name="filter_status"><option value="">All</option><?php foreach ($allStari as $val => $info): ?><option value="<?= $val ?>" <?= ($filterStatus == $val) ? 'selected' : '' ?>><?= htmlspecialchars($info['name']) ?></option><?php endforeach; ?></select></div>
@@ -182,7 +339,7 @@ $list = $connection->query($sql)->fetchAll();
     
     <div class="card-view">
         <?php foreach ($list as $item): $userId = AllocationTable::getCurrentUserForEquipment($item['ID']); $userName = ''; if ($userId && isset($arUsers[$userId])) $userName = $arUsers[$userId]; elseif ($userId) { $user = \Bitrix\Main\UserTable::getById($userId)->fetch(); $userName = trim($user['NAME'] . ' ' . $user['LAST_NAME']) ?: $user['LOGIN']; } ?>
-        <div class="equipment-card"><div class="card-header"><h3><?= htmlspecialchars($item['DENUMIRE'] ?: 'No name') ?></h3><div class="card-cod">Code: <?= htmlspecialchars($item['COD_INVENTAR']) ?></div></div><div class="card-body"><div class="card-row"><span class="label">ID:</span><span class="value"><?= $item['ID'] ?></span></div><div class="card-row"><span class="label">Type:</span><span class="value"><?= htmlspecialchars($tipText[$item['TIP_ENUM']] ?? $item['TIP_ENUM']) ?></span></div><div class="card-row"><span class="label">Manufacturer:</span><span class="value"><?= htmlspecialchars($item['PRODUCATOR'] ?: '-') ?></span></div><div class="card-row"><span class="label">Model:</span><span class="value"><?= htmlspecialchars($item['MODEL'] ?: '-') ?></span></div><div class="card-row"><span class="label">Serial:</span><span class="value"><code><?= htmlspecialchars($item['SERIAL_NR'] ?: '-') ?></code></span></div><div class="card-row"><span class="label">Purchase date:</span><span class="value"><?= $item['DATA_ACHIZITIE'] ? date('d.m.Y', strtotime($item['DATA_ACHIZITIE'])) : '-' ?></span></div><div class="card-row"><span class="label">Supplier:</span><span class="value"><?= htmlspecialchars($item['FURNIZOR'] ?: '-') ?></span></div><div class="card-row"><span class="label">Cost:</span><span class="value"><?= $item['COST_ACHIZITIE'] ? number_format($item['COST_ACHIZITIE'], 2) . '' : '-' ?></span></div><div class="card-row"><span class="label">Warranty:</span><span class="value"><?= $item['DATA_EXPIRARE_GARANTIE'] ? date('d.m.Y', strtotime($item['DATA_EXPIRARE_GARANTIE'])) : '-' ?></span></div><div class="card-row"><span class="label">Status:</span><span class="value"><span class="status-badge" style="background:<?= $stareInfo[$item['STARE_ENUM']]['color'] ?? '#666' ?>"><?= htmlspecialchars($stareInfo[$item['STARE_ENUM']]['name'] ?? $item['STARE_ENUM']) ?></span></span></div><div class="card-row"><span class="label">Location:</span><span class="value"><?= htmlspecialchars($item['LOCATIE'] ?: '-') ?></span></div><div class="card-row"><span class="label">Service contract:</span><span class="value"><?= htmlspecialchars($item['CONTRACT_SERVICE'] ?: '-') ?></span></div><div class="card-row"><span class="label">Responsible:</span><span class="value"><?= htmlspecialchars($userName ?: '-') ?></span></div></div><div class="card-footer"><a href="/inventar/edit/?id=<?= $item['ID'] ?>&back=all" class="btn btn-edit">✏️ Edit</a><a href="/inventar/?id=<?= $item['ID'] ?>&back=all" class="btn btn-details">🔍 Details</a></div></div>
+        <div class="equipment-card"><div class="card-header"><h3><?= htmlspecialchars($item['DENUMIRE'] ?: 'No name') ?></h3><div class="card-cod">Code: <?= htmlspecialchars($item['COD_INVENTAR']) ?></div></div><div class="card-body"><div class="card-row"><span class="label">ID:</span><span class="value"><?= $item['ID'] ?></span></div><div class="card-row"><span class="label">Type:</span><span class="value"><?= htmlspecialchars($tipText[$item['TIP_ENUM']] ?? $item['TIP_ENUM']) ?></span></div><div class="card-row"><span class="label">Manufacturer:</span><span class="value"><?= htmlspecialchars($item['PRODUCATOR'] ?: '-') ?></span></div><div class="card-row"><span class="label">Model:</span><span class="value"><?= htmlspecialchars($item['MODEL'] ?: '-') ?></span></div><div class="card-row"><span class="label">Serial:</span><span class="value"><code><?= htmlspecialchars($item['SERIAL_NR'] ?: '-') ?></code></span></div><div class="card-row"><span class="label">Purchase date:</span><span class="value"><?= $item['DATA_ACHIZITIE'] ? date('d.m.Y', strtotime($item['DATA_ACHIZITIE'])) : '-' ?></span></div><div class="card-row"><span class="label">Supplier:</span><span class="value"><?= htmlspecialchars($item['FURNIZOR'] ?: '-') ?></span></div><div class="card-row"><span class="label">Cost:</span><span class="value"><?= $item['COST_ACHIZITIE'] ? number_format($item['COST_ACHIZITIE'], 2) . ' lei' : '-' ?></span></div><div class="card-row"><span class="label">Warranty:</span><span class="value"><?= $item['DATA_EXPIRARE_GARANTIE'] ? date('d.m.Y', strtotime($item['DATA_EXPIRARE_GARANTIE'])) : '-' ?></span></div><div class="card-row"><span class="label">Status:</span><span class="value"><span class="status-badge" style="background:<?= $stareInfo[$item['STARE_ENUM']]['color'] ?? '#666' ?>"><?= htmlspecialchars($stareInfo[$item['STARE_ENUM']]['name'] ?? $item['STARE_ENUM']) ?></span></span></div><div class="card-row"><span class="label">Location:</span><span class="value"><?= htmlspecialchars($item['LOCATIE'] ?: '-') ?></span></div><div class="card-row"><span class="label">Service contract:</span><span class="value"><?= htmlspecialchars($item['CONTRACT_SERVICE'] ?: '-') ?></span></div><div class="card-row"><span class="label">Responsible:</span><span class="value"><?= htmlspecialchars($userName ?: '-') ?></span></div></div><div class="card-footer"><a href="/inventar/edit/?id=<?= $item['ID'] ?>&back=all" class="btn btn-edit">✏️ Edit</a><a href="/inventar/?id=<?= $item['ID'] ?>&back=all" class="btn btn-details">🔍 Details</a></div></div>
         <?php endforeach; ?>
     </div>
     
