@@ -18,15 +18,13 @@ if ($APPLICATION->GetGroupRight("bitrix.inventar") < "R") {
     $APPLICATION->AuthForm("Access denied");
 }
 
-// ========== FUNCȚIE PENTRU REDIRECȚIONARE SIMPLĂ ==========
-function simpleRedirect() {
+// ========== FUNCȚIE PENTRU REDIRECȚIONARE CURATĂ ==========
+function cleanRedirect() {
     global $APPLICATION;
     
-    // Preia toți parametrii GET
     $params = $_GET;
     
-    // Elimină parametrii care nu trebuie păstrați
-    unset($params['mode']);
+    // Elimină parametrii temporari
     unset($params['_']);
     unset($params['apply']);
     unset($params['action']);
@@ -38,6 +36,11 @@ function simpleRedirect() {
         return $value !== '' && $value !== null;
     });
     
+    // Păstrează mode=frame dacă există
+    if (isset($_GET['mode']) && $_GET['mode'] == 'frame') {
+        $params['mode'] = 'frame';
+    }
+    
     // Asigură-te că page există
     if (!isset($params['page']) || $params['page'] < 1) {
         $params['page'] = 1;
@@ -48,7 +51,7 @@ function simpleRedirect() {
         $url .= '?' . http_build_query($params);
     }
     
-    // Redirecționează cu JavaScript pentru a forța refresh complet
+    // Redirecționează
     ?>
     <script>
         var url = '<?= $url ?>';
@@ -94,7 +97,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action']) && in_array(
             CAdminMessage::ShowMessage("No equipment selected for mass edit!", "ERROR");
         }
     }
-    simpleRedirect();
+    cleanRedirect();
 }
 
 // Process individual delete
@@ -104,7 +107,7 @@ if (isset($_GET['delete_id']) && intval($_GET['delete_id']) > 0) {
         EquipmentTable::delete($id);
         CAdminMessage::ShowMessage("Equipment deleted successfully!", "OK");
     }
-    simpleRedirect();
+    cleanRedirect();
 }
 
 // Process group delete
@@ -117,7 +120,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action']) && $_POST['a
             CAdminMessage::ShowMessage("Equipment deleted successfully!", "OK");
         }
     }
-    simpleRedirect();
+    cleanRedirect();
 }
 
 // Get types and statuses from database
@@ -129,10 +132,8 @@ $search = trim($_GET['search'] ?? '');
 $filterType = trim($_GET['filter_type'] ?? '');
 $filterStatus = trim($_GET['filter_status'] ?? '');
 $filterLocation = trim($_GET['filter_location'] ?? '');
-$filterDateFrom = trim($_GET['filter_date_from'] ?? '');
-$filterDateTo = trim($_GET['filter_date_to'] ?? '');
 $filterUser = trim($_GET['filter_user'] ?? '');
-$page = isset($_GET['page']) ? intval($_GET['page']) : 1;
+$filterAssigned = trim($_GET['filter_assigned'] ?? '');
 
 // Reset filter
 if (isset($_GET['reset_filter'])) {
@@ -145,7 +146,7 @@ $sqlHelper = $connection->getSqlHelper();
 
 $whereConditions = [];
 
-// Search - caută în toate câmpurile relevante
+// Search - caută în toate câmpurile relevante (inclusiv Manufacturer, Model, Serial)
 if (!empty($search)) {
     $searchTerm = $sqlHelper->forSql('%' . $search . '%');
     $whereConditions[] = "(e.COD_INVENTAR LIKE '{$searchTerm}' 
@@ -169,20 +170,21 @@ if (!empty($filterLocation)) {
     $whereConditions[] = "e.LOCATIE = '" . $sqlHelper->forSql($filterLocation) . "'";
 }
 
-if (!empty($filterDateFrom)) {
-    $whereConditions[] = "e.DATA_ACHIZITIE >= '" . $sqlHelper->forSql($filterDateFrom) . "'";
-}
-
-if (!empty($filterDateTo)) {
-    $whereConditions[] = "e.DATA_ACHIZITIE <= '" . $sqlHelper->forSql($filterDateTo) . "'";
-}
-
 if (!empty($filterUser)) {
     $userId = intval($filterUser);
     $whereConditions[] = "EXISTS (SELECT 1 FROM b_bitrix_inventar_allocation a WHERE a.EQUIPMENT_ID = e.ID AND a.USER_ID = {$userId} AND a.DATA_RETURNARE IS NULL)";
 }
 
+if (!empty($filterAssigned)) {
+    if ($filterAssigned == 'yes') {
+        $whereConditions[] = "EXISTS (SELECT 1 FROM b_bitrix_inventar_allocation a WHERE a.EQUIPMENT_ID = e.ID AND a.DATA_RETURNARE IS NULL)";
+    } elseif ($filterAssigned == 'no') {
+        $whereConditions[] = "NOT EXISTS (SELECT 1 FROM b_bitrix_inventar_allocation a WHERE a.EQUIPMENT_ID = e.ID AND a.DATA_RETURNARE IS NULL)";
+    }
+}
+
 // ========== PAGINARE ==========
+$page = isset($_GET['page']) ? intval($_GET['page']) : 1;
 $perPage = 20;
 $offset = ($page - 1) * $perPage;
 
@@ -278,13 +280,11 @@ function buildBackUrl() {
         'filter_type' => $_GET['filter_type'] ?? '',
         'filter_status' => $_GET['filter_status'] ?? '',
         'filter_location' => $_GET['filter_location'] ?? '',
-        'filter_date_from' => $_GET['filter_date_from'] ?? '',
-        'filter_date_to' => $_GET['filter_date_to'] ?? '',
         'filter_user' => $_GET['filter_user'] ?? '',
+        'filter_assigned' => $_GET['filter_assigned'] ?? '',
         'page' => $_GET['page'] ?? 1
     ]);
     
-    // Adaugă mode dacă există
     if (isset($_GET['mode']) && $_GET['mode'] == 'frame') {
         $params['mode'] = 'frame';
     }
@@ -298,207 +298,345 @@ function buildBackUrl() {
 
 $backParams = buildBackUrl();
 
-// ========== AFIȘARE FILTRU ==========
+// ========== AFIȘARE FILTRU PROFESIONAL ==========
 ?>
 <style>
-.filter-box {
-    background: #f5f5f5;
-    padding: 15px 20px;
-    border-radius: 8px;
-    margin-bottom: 20px;
-    border: 1px solid #ddd;
+/* ========== FILTRU PROFESIONAL ========== */
+.filter-container {
+    background: #fff;
+    border-radius: 10px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+    margin-bottom: 25px;
+    overflow: hidden;
+    border: 1px solid #e8ecf0;
 }
-.filter-row {
+
+.filter-header {
     display: flex;
-    flex-wrap: wrap;
-    gap: 12px;
-    align-items: flex-end;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 20px;
+    background: #f8fafc;
+    border-bottom: 1px solid #e8ecf0;
+    cursor: pointer;
+    user-select: none;
+}
+.filter-header:hover {
+    background: #f0f4f8;
+}
+.filter-header .title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 600;
+    color: #2c3e50;
+    font-size: 14px;
+}
+.filter-header .title .icon {
+    font-size: 18px;
+}
+.filter-header .badge {
+    background: #2c7ed6;
+    color: white;
+    padding: 2px 12px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+}
+.filter-header .toggle-icon {
+    transition: transform 0.3s ease;
+    font-size: 18px;
+    color: #999;
+}
+.filter-header .toggle-icon.open {
+    transform: rotate(180deg);
+}
+
+.filter-body {
+    padding: 20px;
+}
+.filter-body.collapsed {
+    display: none;
+}
+
+.filter-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 15px 20px;
 }
 .filter-group {
     display: flex;
     flex-direction: column;
-    flex: 1;
-    min-width: 150px;
 }
 .filter-group label {
     font-size: 11px;
-    font-weight: bold;
-    color: #555;
-    margin-bottom: 3px;
+    font-weight: 600;
+    color: #666;
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+.filter-group label .icon {
+    margin-right: 4px;
 }
 .filter-group input,
 .filter-group select {
-    padding: 6px 8px;
-    border: 1px solid #ccc;
-    border-radius: 4px;
+    padding: 8px 12px;
+    border: 1px solid #dce1e6;
+    border-radius: 6px;
     font-size: 13px;
-    height: 32px;
-    background: white;
+    color: #333;
+    background: #fafbfc;
+    transition: all 0.2s;
+    height: 38px;
     width: 100%;
 }
 .filter-group input:focus,
 .filter-group select:focus {
     border-color: #2c7ed6;
     outline: none;
+    background: #fff;
+    box-shadow: 0 0 0 3px rgba(44, 126, 214, 0.1);
 }
+.filter-group input::placeholder {
+    color: #b0b8c0;
+}
+.filter-group select {
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23666' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    padding-right: 35px;
+}
+
 .filter-actions {
     display: flex;
-    gap: 8px;
+    gap: 10px;
     align-items: center;
-    padding-bottom: 0;
+    padding-top: 5px;
 }
 .filter-actions .btn-filter {
     background: #2c7ed6;
     color: white;
     border: none;
-    padding: 6px 16px;
-    border-radius: 4px;
+    padding: 8px 24px;
+    border-radius: 6px;
     cursor: pointer;
-    height: 32px;
     font-size: 13px;
+    font-weight: 600;
+    transition: background 0.2s;
+    height: 38px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
 }
 .filter-actions .btn-filter:hover {
-    background: #1a4d8c;
+    background: #1a5fa0;
 }
 .filter-actions .btn-reset {
-    background: #999;
-    color: white;
+    background: #e8ecf0;
+    color: #555;
     border: none;
-    padding: 6px 16px;
-    border-radius: 4px;
+    padding: 8px 20px;
+    border-radius: 6px;
     cursor: pointer;
-    height: 32px;
     font-size: 13px;
+    font-weight: 500;
+    transition: background 0.2s;
     text-decoration: none;
     display: inline-flex;
     align-items: center;
+    gap: 6px;
+    height: 38px;
 }
 .filter-actions .btn-reset:hover {
-    background: #777;
+    background: #d5dce3;
 }
-.filter-toggle {
-    cursor: pointer;
-    color: #2c7ed6;
-    font-weight: bold;
-    padding: 5px 10px;
-    background: #e8f0fe;
-    border-radius: 4px;
-    display: inline-block;
-    margin-bottom: 10px;
+
+.filter-divider {
+    grid-column: 1 / -1;
+    border: none;
+    border-top: 1px solid #e8ecf0;
+    margin: 5px 0;
+}
+
+.filter-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 15px 25px;
+    padding: 10px 20px;
+    background: #f8fafc;
+    border-top: 1px solid #e8ecf0;
     font-size: 13px;
+    color: #555;
 }
-.filter-toggle:hover {
-    background: #d0e0fe;
+.filter-stats .stat-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
 }
-.filter-collapsed .filter-row {
-    display: none;
+.filter-stats .stat-item strong {
+    color: #2c3e50;
 }
+.filter-stats .stat-item .value {
+    font-weight: 600;
+    color: #2c7ed6;
+}
+
 @media (max-width: 768px) {
-    .filter-group {
-        min-width: 100%;
+    .filter-grid {
+        grid-template-columns: 1fr;
     }
     .filter-actions {
-        width: 100%;
-        justify-content: flex-end;
+        flex-wrap: wrap;
+    }
+    .filter-actions .btn-filter,
+    .filter-actions .btn-reset {
+        flex: 1;
+        justify-content: center;
+    }
+    .filter-stats {
+        flex-direction: column;
+        gap: 5px;
+        padding: 10px 15px;
     }
 }
 </style>
 
-<div class="filter-box" id="filterBox">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-            <span class="filter-toggle" onclick="toggleFilter()">🔽 <span id="filterToggleText">Show filters</span></span>
-            <?php if (!empty($search) || !empty($filterType) || !empty($filterStatus) || !empty($filterLocation) || !empty($filterDateFrom) || !empty($filterDateTo) || !empty($filterUser)): ?>
-            <span style="background: #ff9800; color: white; padding: 2px 10px; border-radius: 12px; font-size: 12px;">Active filters</span>
+<div class="filter-container" id="filterContainer">
+    <div class="filter-header" onclick="toggleFilter()">
+        <div class="title">
+            <span class="icon">🔍</span>
+            Advanced Filters
+            <?php if (!empty($search) || !empty($filterType) || !empty($filterStatus) || !empty($filterLocation) || !empty($filterUser) || !empty($filterAssigned)): ?>
+            <span class="badge">Active</span>
             <?php endif; ?>
         </div>
-        <div style="font-size: 12px; color: #666;">
-            <strong>Total:</strong> <?= $total ?> equipment
+        <div>
+            <span class="toggle-icon" id="filterToggleIcon">▼</span>
         </div>
     </div>
     
-    <form method="GET" id="filterForm">
-        <div class="filter-row" id="filterRow">
-            <div class="filter-group" style="flex: 3;">
-                <label>🔍 Search</label>
-                <input type="text" name="search" value="<?= htmlspecialchars($search) ?>" placeholder="Search in: Code, Name, Manufacturer, Model, Serial, Location, Supplier...">
+    <div class="filter-body" id="filterBody">
+        <form method="GET" id="filterForm">
+            <div class="filter-grid">
+                <!-- Search - include Manufacturer, Model, Serial -->
+                <div class="filter-group" style="grid-column: 1 / -1;">
+                    <label><span class="icon">🔎</span>Global Search</label>
+                    <input type="text" name="search" value="<?= htmlspecialchars($search) ?>" placeholder="Search in: Code, Name, Manufacturer, Model, Serial, Location, Supplier...">
+                </div>
+                
+                <hr class="filter-divider">
+                
+                <!-- Type -->
+                <div class="filter-group">
+                    <label><span class="icon">📁</span>Type</label>
+                    <select name="filter_type">
+                        <option value="">All Types</option>
+                        <?php foreach ($tipText as $val => $name): ?>
+                        <option value="<?= $val ?>" <?= ($filterType == $val) ? 'selected' : '' ?>><?= htmlspecialchars($name) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                
+                <!-- Status -->
+                <div class="filter-group">
+                    <label><span class="icon">⚙️</span>Status</label>
+                    <select name="filter_status">
+                        <option value="">All Statuses</option>
+                        <?php foreach ($stareInfo as $val => $info): ?>
+                        <option value="<?= $val ?>" <?= ($filterStatus == $val) ? 'selected' : '' ?>><?= htmlspecialchars($info['name']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                
+                <!-- Location -->
+                <div class="filter-group">
+                    <label><span class="icon">📍</span>Location</label>
+                    <select name="filter_location">
+                        <option value="">All Locations</option>
+                        <?php foreach ($allLocations as $loc): ?>
+                        <option value="<?= htmlspecialchars($loc) ?>" <?= ($filterLocation == $loc) ? 'selected' : '' ?>><?= htmlspecialchars($loc) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                
+                <!-- Assigned Status -->
+                <div class="filter-group">
+                    <label><span class="icon">📌</span>Assigned Status</label>
+                    <select name="filter_assigned">
+                        <option value="">All Equipment</option>
+                        <option value="yes" <?= ($filterAssigned == 'yes') ? 'selected' : '' ?>>✅ Assigned</option>
+                        <option value="no" <?= ($filterAssigned == 'no') ? 'selected' : '' ?>>📦 Not Assigned</option>
+                    </select>
+                </div>
+                
+                <!-- Responsible User (aliniat lângă Assigned) -->
+                <div class="filter-group">
+                    <label><span class="icon">👤</span>Responsible User</label>
+                    <select name="filter_user">
+                        <option value="">All Users</option>
+                        <?php foreach ($arUsers as $uid => $uname): ?>
+                        <option value="<?= $uid ?>" <?= ($filterUser == $uid) ? 'selected' : '' ?>><?= htmlspecialchars($uname) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                
+                <hr class="filter-divider">
+                
+                <!-- Actions -->
+                <div class="filter-actions" style="grid-column: 1 / -1;">
+                    <button type="submit" class="btn-filter">🔍 Apply Filters</button>
+                    <a href="?reset_filter=1" class="btn-reset">✖ Reset All</a>
+                </div>
             </div>
-            
-            <div class="filter-group">
-                <label>📁 Type</label>
-                <select name="filter_type">
-                    <option value="">All types</option>
-                    <?php foreach ($tipText as $val => $name): ?>
-                    <option value="<?= $val ?>" <?= ($filterType == $val) ? 'selected' : '' ?>><?= htmlspecialchars($name) ?></option>
-                    <?php endforeach; ?>
-                </select>
-            </div>
-            
-            <div class="filter-group">
-                <label>⚙️ Status</label>
-                <select name="filter_status">
-                    <option value="">All statuses</option>
-                    <?php foreach ($stareInfo as $val => $info): ?>
-                    <option value="<?= $val ?>" <?= ($filterStatus == $val) ? 'selected' : '' ?>><?= htmlspecialchars($info['name']) ?></option>
-                    <?php endforeach; ?>
-                </select>
-            </div>
-        </div>
-        
-        <div class="filter-row" id="filterRow2" style="margin-top: 8px;">
-            <div class="filter-group">
-                <label>📍 Location</label>
-                <select name="filter_location">
-                    <option value="">All locations</option>
-                    <?php foreach ($allLocations as $loc): ?>
-                    <option value="<?= htmlspecialchars($loc) ?>" <?= ($filterLocation == $loc) ? 'selected' : '' ?>><?= htmlspecialchars($loc) ?></option>
-                    <?php endforeach; ?>
-                </select>
-            </div>
-            
-            <div class="filter-group">
-                <label>👤 Responsible user</label>
-                <select name="filter_user">
-                    <option value="">All users</option>
-                    <?php foreach ($arUsers as $uid => $uname): ?>
-                    <option value="<?= $uid ?>" <?= ($filterUser == $uid) ? 'selected' : '' ?>><?= htmlspecialchars($uname) ?></option>
-                    <?php endforeach; ?>
-                </select>
-            </div>
-            
-            <div class="filter-group">
-                <label>📅 Purchase date from</label>
-                <input type="date" name="filter_date_from" value="<?= htmlspecialchars($filterDateFrom) ?>">
-            </div>
-            
-            <div class="filter-group">
-                <label>📅 Purchase date to</label>
-                <input type="date" name="filter_date_to" value="<?= htmlspecialchars($filterDateTo) ?>">
-            </div>
-            
-            <div class="filter-actions">
-                <button type="submit" class="btn-filter">🔍 Filter</button>
-                <a href="?reset_filter=1" class="btn-reset">✖ Reset</a>
-            </div>
-        </div>
-        
-        <input type="hidden" name="page" value="1">
-    </form>
+            <input type="hidden" name="page" value="1">
+        </form>
+    </div>
+    
+    <!-- Filter Stats -->
+    <div class="filter-stats" id="filterStats">
+        <span class="stat-item">📊 Total: <strong><?= $total ?></strong> equipment</span>
+        <?php if (!empty($search)): ?>
+        <span class="stat-item">🔎 Search: <span class="value">"<?= htmlspecialchars($search) ?>"</span></span>
+        <?php endif; ?>
+        <?php if (!empty($filterType) && isset($tipText[$filterType])): ?>
+        <span class="stat-item">📁 Type: <span class="value"><?= htmlspecialchars($tipText[$filterType]) ?></span></span>
+        <?php endif; ?>
+        <?php if (!empty($filterStatus) && isset($stareInfo[$filterStatus])): ?>
+        <span class="stat-item">⚙️ Status: <span class="value"><?= htmlspecialchars($stareInfo[$filterStatus]['name']) ?></span></span>
+        <?php endif; ?>
+        <?php if (!empty($filterLocation)): ?>
+        <span class="stat-item">📍 Location: <span class="value"><?= htmlspecialchars($filterLocation) ?></span></span>
+        <?php endif; ?>
+        <?php if (!empty($filterUser) && isset($arUsers[$filterUser])): ?>
+        <span class="stat-item">👤 User: <span class="value"><?= htmlspecialchars($arUsers[$filterUser]) ?></span></span>
+        <?php endif; ?>
+        <?php if ($filterAssigned == 'yes'): ?>
+        <span class="stat-item" style="color:#4CAF50;">✅ Assigned only</span>
+        <?php elseif ($filterAssigned == 'no'): ?>
+        <span class="stat-item" style="color:#FF9800;">📦 Not assigned only</span>
+        <?php endif; ?>
+        <span class="stat-item" style="margin-left: auto;">📄 Page <?= $page ?> of <?= $totalPages > 0 ? $totalPages : 1 ?></span>
+    </div>
 </div>
 
 <script>
 function toggleFilter() {
-    var rows = document.querySelectorAll('#filterRow, #filterRow2');
-    var toggleText = document.getElementById('filterToggleText');
-    var isHidden = rows[0].style.display === 'none';
+    var body = document.getElementById('filterBody');
+    var icon = document.getElementById('filterToggleIcon');
+    var isCollapsed = body.classList.contains('collapsed');
     
-    rows.forEach(function(row) {
-        row.style.display = isHidden ? 'flex' : 'none';
-    });
-    
-    toggleText.textContent = isHidden ? 'Hide filters' : 'Show filters';
+    if (isCollapsed) {
+        body.classList.remove('collapsed');
+        icon.textContent = '▼';
+    } else {
+        body.classList.add('collapsed');
+        icon.textContent = '▶';
+    }
 }
 
+// Auto-submit filter on Enter key
 document.addEventListener("DOMContentLoaded", function() {
     document.querySelectorAll("#filterForm input, #filterForm select").forEach(function(el) {
         el.addEventListener("keypress", function(e) {
@@ -508,6 +646,19 @@ document.addEventListener("DOMContentLoaded", function() {
             }
         });
     });
+    
+    // Restore filter state from localStorage
+    var savedState = localStorage.getItem('filterCollapsed');
+    if (savedState === 'true') {
+        document.getElementById('filterBody').classList.add('collapsed');
+        document.getElementById('filterToggleIcon').textContent = '▶';
+    }
+    
+    // Save state when toggling
+    document.querySelector('.filter-header').addEventListener('click', function() {
+        var isCollapsed = document.getElementById('filterBody').classList.contains('collapsed');
+        localStorage.setItem('filterCollapsed', isCollapsed);
+    });
 });
 </script>
 
@@ -516,7 +667,7 @@ document.addEventListener("DOMContentLoaded", function() {
 echo '<div style="margin-bottom: 15px; padding: 10px; background: #f5f5f5; border-radius: 5px;">';
 echo '<strong>Total equipment:</strong> ' . $total . ' | ';
 echo '<strong>Page:</strong> ' . $page . ' of ' . $totalPages;
-if (!empty($search) || !empty($filterType) || !empty($filterStatus) || !empty($filterLocation) || !empty($filterDateFrom) || !empty($filterDateTo) || !empty($filterUser)) {
+if (!empty($search) || !empty($filterType) || !empty($filterStatus) || !empty($filterLocation) || !empty($filterUser) || !empty($filterAssigned)) {
     echo ' | <span style="color: #ff9800;">⚡ Filtered results</span>';
 }
 echo '</div>';
@@ -535,15 +686,11 @@ foreach ($list as $arRes) {
     }
     $row->AddViewField("UTILIZATOR", $userName ?: "Not assigned");
     
-	$row->AddViewField(
-		"DATA_ACHIZITIE",
-		!empty($arRes['DATA_ACHIZITIE']) ? htmlspecialchars($arRes['DATA_ACHIZITIE']) : '-'
-	);
-
-	$row->AddViewField(
-		"DATA_EXPIRARE_GARANTIE",
-		!empty($arRes['DATA_EXPIRARE_GARANTIE']) ? htmlspecialchars($arRes['DATA_EXPIRARE_GARANTIE']) : '-'
-	);
+    $dataAchizitie = $arRes['DATA_ACHIZITIE'] ? date('d.m.Y', strtotime($arRes['DATA_ACHIZITIE'])) : '-';
+    $row->AddViewField("DATA_ACHIZITIE", $dataAchizitie);
+    
+    $garantie = $arRes['DATA_EXPIRARE_GARANTIE'] ? date('d.m.Y', strtotime($arRes['DATA_EXPIRARE_GARANTIE'])) : '-';
+    $row->AddViewField("DATA_EXPIRARE_GARANTIE", $garantie);
     
     $stareColor = isset($stareInfo[$arRes['STARE_ENUM']]['color']) ? $stareInfo[$arRes['STARE_ENUM']]['color'] : '#666';
     $stareName = isset($stareInfo[$arRes['STARE_ENUM']]['name']) ? $stareInfo[$arRes['STARE_ENUM']]['name'] : $arRes['STARE_ENUM'];
@@ -575,7 +722,6 @@ $arGroupActions = [
     "delete" => "Delete selected"
 ];
 
-// Adaugă acțiunile de editare în masă
 if ($APPLICATION->GetGroupRight("bitrix.inventar") >= "W") {
     $arGroupActions["edit_type"] = "Edit Type";
     $arGroupActions["edit_status"] = "Edit Status";
@@ -593,12 +739,10 @@ function buildFilterUrl($params = []) {
         'filter_type' => $_GET['filter_type'] ?? '',
         'filter_status' => $_GET['filter_status'] ?? '',
         'filter_location' => $_GET['filter_location'] ?? '',
-        'filter_date_from' => $_GET['filter_date_from'] ?? '',
-        'filter_date_to' => $_GET['filter_date_to'] ?? '',
-        'filter_user' => $_GET['filter_user'] ?? ''
+        'filter_user' => $_GET['filter_user'] ?? '',
+        'filter_assigned' => $_GET['filter_assigned'] ?? ''
     ]);
     
-    // Adaugă mode dacă există
     if (isset($_GET['mode']) && $_GET['mode'] == 'frame') {
         $baseParams['mode'] = 'frame';
     }
@@ -671,7 +815,6 @@ var statusOptions = <?= json_encode($statusOptionsJson) ?>;
 
 // Funcție pentru inițializarea dropdown-urilor
 function initMassEdit() {
-    // Găsim dropdown-ul de acțiuni - name="action"
     var actionSelect = document.querySelector("select[name='action']");
     if (!actionSelect) {
         actionSelect = document.getElementById("tbl_equipment_action");
@@ -693,7 +836,6 @@ function initMassEdit() {
             }
             
             if (applySpan) {
-                // Verificăm dacă containerul există deja
                 var existingContainer = footer.querySelector(".mass-edit-fields");
                 if (existingContainer) {
                     existingContainer.remove();
@@ -711,19 +853,14 @@ function initMassEdit() {
                 container.appendChild(valueSelect);
                 applySpan.parentNode.insertBefore(container, applySpan);
                 
-                // Eliminăm event listener-urile vechi
                 actionSelect.removeEventListener('change', handleActionChange);
-                // Adăugăm event listener nou
                 actionSelect.addEventListener('change', handleActionChange);
                 
-                // Salvăm referințe pentru handler
                 window._massEditValueSelect = valueSelect;
                 window._massEditContainer = container;
                 
-                // Verificăm dacă acțiunea curentă este edit_type sau edit_status
                 var currentAction = actionSelect.value;
                 if (currentAction === "edit_type" || currentAction === "edit_status") {
-                    // Trigger pentru a afișa dropdown-ul
                     handleActionChange();
                 }
             }
@@ -731,7 +868,6 @@ function initMassEdit() {
     }
 }
 
-// Handler pentru schimbarea acțiunii
 function handleActionChange() {
     var actionSelect = document.querySelector("select[name='action']") || document.getElementById("tbl_equipment_action");
     var action = actionSelect ? actionSelect.value : '';
@@ -762,12 +898,8 @@ function handleActionChange() {
     }
 }
 
-// Funcție de inițializare completă
 function fullInit() {
-    // Inițializare dropdown-uri
     initMassEdit();
-    
-    // Auto-submit filter on Enter key
     document.querySelectorAll("#filterForm input, #filterForm select").forEach(function(el) {
         el.addEventListener("keypress", function(e) {
             if (e.key === "Enter") {
@@ -778,60 +910,34 @@ function fullInit() {
     });
 }
 
-// Inițializare la încărcarea paginii
 if (document.readyState === 'loading') {
     document.addEventListener("DOMContentLoaded", function() {
         setTimeout(fullInit, 200);
     });
 } else {
-    // Pagina este deja încărcată
     setTimeout(fullInit, 200);
 }
 
-// Pentru cazul în care pagina este reîncărcată parțial prin AJAX (iframe mode)
-// Ascultăm evenimentele de reîncărcare
 if (window.BX && window.BX.ajax) {
-    // Folosim un MutationObserver pentru a detecta schimbările în DOM
     var observer = new MutationObserver(function(mutations) {
-        // Verificăm dacă footer-ul a fost modificat
         var footer = document.getElementById("tbl_equipment_footer");
         if (footer) {
-            // Verificăm dacă dropdown-urile noastre există
             var container = footer.querySelector(".mass-edit-fields");
             if (!container) {
-                // Dacă nu există, le recreăm
                 initMassEdit();
             }
         }
     });
     
-    // Observăm întregul document pentru schimbări
     observer.observe(document.body, {
         childList: true,
         subtree: true
     });
 }
 
-// Reinițializare după orice refresh (pentru cazul în care DOM-ul se schimbă)
 setTimeout(function() {
     initMassEdit();
 }, 1000);
-
-// Pentru cazul în care se folosește BX.ajax.submitComponentForm
-// Suprascriem funcția de callback pentru a reinițializa după submit
-if (window.BX && window.BX.ajax) {
-    var originalSubmit = BX.ajax.submitComponentForm;
-    if (originalSubmit) {
-        BX.ajax.submitComponentForm = function(form, container, bReturn) {
-            var result = originalSubmit.call(this, form, container, bReturn);
-            // După submit, reinițializăm
-            setTimeout(function() {
-                initMassEdit();
-            }, 500);
-            return result;
-        };
-    }
-}
 </script>
 
 <?php
