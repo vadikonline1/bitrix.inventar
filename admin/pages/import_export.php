@@ -192,7 +192,9 @@ if ($APPLICATION->GetGroupRight("bitrix.inventar") < "R") {
 
 $importMessage = '';
 $imported = 0;
+$updated = 0;
 $errors = 0;
+$warningDetails = array();
 $errorDetails = array();
 
 // Function to detect separator
@@ -255,6 +257,41 @@ function convertToBitrixDate($dateString) {
     return null;
 }
 
+// Function to find user by name
+function findUserByName($userName) {
+    if (empty($userName)) {
+        return null;
+    }
+    
+    $userName = trim($userName);
+    
+    // Încearcă să găsească utilizatorul după nume și prenume
+    $parts = explode(' ', $userName);
+    $name = $parts[0] ?? '';
+    $lastName = $parts[1] ?? '';
+    
+    $filter = ['ACTIVE' => 'Y'];
+    if (!empty($name) && !empty($lastName)) {
+        $filter['NAME'] = $name;
+        $filter['LAST_NAME'] = $lastName;
+    } elseif (!empty($name)) {
+        $filter['NAME'] = $name;
+    }
+    
+    $dbUsers = CUser::GetList('id', 'asc', $filter);
+    if ($user = $dbUsers->Fetch()) {
+        return $user['ID'];
+    }
+    
+    // Dacă nu a fost găsit, încearcă să caute după login
+    $dbUsers = CUser::GetList('id', 'asc', ['LOGIN' => $userName, 'ACTIVE' => 'Y']);
+    if ($user = $dbUsers->Fetch()) {
+        return $user['ID'];
+    }
+    
+    return null;
+}
+
 // Process CSV import
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['import_file']) && $_FILES['import_file']['error'] == 0) {
     $file = $_FILES['import_file']['tmp_name'];
@@ -303,13 +340,14 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['import_file']) && $_F
                 'STARE_ENUM' => array_search('Status', $headerRow),
                 'LOCATIE' => array_search('Location', $headerRow),
                 'CONTRACT_SERVICE' => array_search('Service contract', $headerRow),
+                'ASSIGNED_USER' => array_search('Assigned user', $headerRow),
             ];
             continue;
         }
         
         if (count($data) < 3) {
             $errors++;
-            $errorDetails[] = "Line {$lineNum}: Too few columns (" . count($data) . ")";
+            $errorDetails[] = "Line <strong>{$lineNum}</strong>: Too few columns (" . count($data) . ")";
             continue;
         }
         
@@ -317,40 +355,82 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['import_file']) && $_F
         $codInventar = trim($data[$columnMap['COD_INVENTAR']] ?? '');
         $denumire = trim($data[$columnMap['DENUMIRE']] ?? '');
         $tipEnum = trim($data[$columnMap['TIP_ENUM']] ?? '');
+        $serialNr = isset($columnMap['SERIAL_NR']) ? trim($data[$columnMap['SERIAL_NR']] ?? '') : '';
+        $assignedUser = isset($columnMap['ASSIGNED_USER']) ? trim($data[$columnMap['ASSIGNED_USER']] ?? '') : '';
         
         if (empty($codInventar)) {
             $errors++;
-            $errorDetails[] = "Line {$lineNum}: Empty inventory code";
+            $errorDetails[] = "Line <strong>{$lineNum}</strong>: Empty inventory code";
             continue;
         }
         
         if (empty($denumire)) {
             $errors++;
-            $errorDetails[] = "Line {$lineNum}: Empty name";
+            $errorDetails[] = "Line <strong>{$lineNum}</strong>: Empty name";
             continue;
         }
         
         if (empty($tipEnum)) {
             $errors++;
-            $errorDetails[] = "Line {$lineNum}: Empty type";
+            $errorDetails[] = "Line <strong>{$lineNum}</strong>: Empty type";
             continue;
         }
         
-        // Check for duplicates
-        $existing = EquipmentTable::getList([
+        // ========== VERIFICĂ DUPLICATE ==========
+        $existingCode = EquipmentTable::getList([
             'filter' => ['=COD_INVENTAR' => $codInventar],
             'select' => ['ID']
         ])->fetch();
         
-        if ($existing) {
-            $errors++;
-            $errorDetails[] = "Line {$lineNum}: Inventory code {$codInventar} already exists";
-            continue;
+        // Verifică dacă serialul există deja (dacă este completat)
+        $existingSerial = null;
+        $serialConflict = false;
+        if (!empty($serialNr)) {
+            $existingSerial = EquipmentTable::getList([
+                'filter' => ['=SERIAL_NR' => $serialNr],
+                'select' => ['ID', 'COD_INVENTAR']
+            ])->fetch();
+            
+            if ($existingSerial) {
+                $serialConflict = true;
+            }
         }
         
-        // Date conversion
+        // ========== GESTIONEAZĂ CONFLICTUL DE SERIAL ==========
+        $modifiedSerial = $serialNr;
+        if ($serialConflict && !$existingCode) {
+            // Dacă serialul există dar codul inventar este diferit, adaugă codul inventar la serial
+            $modifiedSerial = $serialNr . '_' . $codInventar;
+            
+            // Verifică dacă noul serial este unic
+            $checkNewSerial = EquipmentTable::getList([
+                'filter' => ['=SERIAL_NR' => $modifiedSerial],
+                'select' => ['ID']
+            ])->fetch();
+            
+            if (!$checkNewSerial) {
+                $warningDetails[] = "Line <strong>{$lineNum}</strong>: Serial number '<strong>{$serialNr}</strong>' already exists (used by inventory code '<strong>{$existingSerial['COD_INVENTAR']}</strong>'). Changed to '<strong>{$modifiedSerial}</strong>' to avoid conflict.";
+            } else {
+                $errors++;
+                $errorDetails[] = "Line <strong>{$lineNum}</strong>: Serial number '<strong>{$serialNr}</strong>' already exists and the modified version '<strong>{$modifiedSerial}</strong>' also exists. Please fix manually.";
+                continue;
+            }
+        } elseif ($serialConflict && $existingCode) {
+            // Dacă și codul inventar și serialul există
+            $warningDetails[] = "Line <strong>{$lineNum}</strong>: Both inventory code '<strong>{$codInventar}</strong>' and serial number '<strong>{$serialNr}</strong>' already exist. Equipment will be updated.";
+        }
+        
+        // ========== CONVERTIRE DATE ==========
         $dataAchizitie = isset($columnMap['DATA_ACHIZITIE']) ? convertToBitrixDate($data[$columnMap['DATA_ACHIZITIE']] ?? '') : null;
         $dataExpirare = isset($columnMap['DATA_EXPIRARE_GARANTIE']) ? convertToBitrixDate($data[$columnMap['DATA_EXPIRARE_GARANTIE']] ?? '') : null;
+        
+        if (!empty($data[$columnMap['DATA_ACHIZITIE']] ?? '') && $dataAchizitie === null) {
+            $warningDetails[] = "Line <strong>{$lineNum}</strong>: Purchase date could not be converted";
+        }
+        
+        if (!empty($data[$columnMap['DATA_EXPIRARE_GARANTIE']] ?? '') && $dataExpirare === null) {
+            $warningDetails[] = "Line <strong>{$lineNum}</strong>: Warranty date could not be converted";
+        }
         
         $fields = [
             'COD_INVENTAR' => $codInventar,
@@ -358,7 +438,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['import_file']) && $_F
             'TIP_ENUM' => $tipEnum,
             'PRODUCATOR' => isset($columnMap['PRODUCATOR']) ? trim($data[$columnMap['PRODUCATOR']] ?? '') : '',
             'MODEL' => isset($columnMap['MODEL']) ? trim($data[$columnMap['MODEL']] ?? '') : '',
-            'SERIAL_NR' => isset($columnMap['SERIAL_NR']) ? trim($data[$columnMap['SERIAL_NR']] ?? '') : '',
+            'SERIAL_NR' => $modifiedSerial,
             'DATA_ACHIZITIE' => $dataAchizitie,
             'FURNIZOR' => isset($columnMap['FURNIZOR']) ? trim($data[$columnMap['FURNIZOR']] ?? '') : '',
             'COST_ACHIZITIE' => isset($columnMap['COST_ACHIZITIE']) && !empty($data[$columnMap['COST_ACHIZITIE']]) ? floatval($data[$columnMap['COST_ACHIZITIE']]) : null,
@@ -366,34 +446,111 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['import_file']) && $_F
             'STARE_ENUM' => isset($columnMap['STARE_ENUM']) ? trim($data[$columnMap['STARE_ENUM']] ?? '2') : '2',
             'LOCATIE' => isset($columnMap['LOCATIE']) ? trim($data[$columnMap['LOCATIE']] ?? '') : '',
             'CONTRACT_SERVICE' => isset($columnMap['CONTRACT_SERVICE']) ? trim($data[$columnMap['CONTRACT_SERVICE']] ?? '') : '',
-            'NOTIFICATION_SENT' => 'N'
         ];
         
         try {
-            $result = EquipmentTable::add($fields);
-            if ($result->isSuccess()) {
-                $imported++;
+            $equipmentId = null;
+            
+            if ($existingCode) {
+                // ========== ACTUALIZEAZĂ ECHIPAMENTUL EXISTENT ==========
+                $result = EquipmentTable::update($existingCode['ID'], $fields);
+                if ($result->isSuccess()) {
+                    $updated++;
+                    $equipmentId = $existingCode['ID'];
+                } else {
+                    $errors++;
+                    $errorDetails[] = "Line <strong>{$lineNum}</strong>: Update error - " . implode(", ", $result->getErrorMessages());
+                    continue;
+                }
             } else {
-                $errors++;
-                $errorDetails[] = "Line {$lineNum}: " . implode(", ", $result->getErrorMessages());
+                // ========== ADĂUGĂ ECHIPAMENT NOU ==========
+                $fields['NOTIFICATION_SENT'] = 'N';
+                $result = EquipmentTable::add($fields);
+                if ($result->isSuccess()) {
+                    $imported++;
+                    $equipmentId = $result->getId();
+                } else {
+                    $errors++;
+                    $errorDetails[] = "Line <strong>{$lineNum}</strong>: " . implode(", ", $result->getErrorMessages());
+                    continue;
+                }
             }
+            
+            // ========== PROCESEAZĂ RESPONSABILUL ==========
+            if ($equipmentId && !empty($assignedUser)) {
+                $userId = findUserByName($assignedUser);
+                
+                if ($userId) {
+                    // Verifică dacă există deja o alocare activă
+                    $currentAlloc = AllocationTable::getList([
+                        'filter' => ['=EQUIPMENT_ID' => $equipmentId, '=DATA_RETURNARE' => null],
+                        'select' => ['ID']
+                    ])->fetch();
+                    
+                    if ($currentAlloc) {
+                        // Închide alocarea veche
+                        AllocationTable::update($currentAlloc['ID'], [
+                            'DATA_RETURNARE' => new Date(),
+                            'MOTIV_RETURNARE' => 'Changed via import'
+                        ]);
+                    }
+                    
+                    // Adaugă alocare nouă
+                    $allocResult = AllocationTable::add([
+                        'EQUIPMENT_ID' => $equipmentId,
+                        'USER_ID' => $userId,
+                        'DATA_PREDARE' => new Date()
+                    ]);
+                    
+                    if ($allocResult->isSuccess()) {
+                        EquipmentTable::update($equipmentId, ['STARE_ENUM' => '1']); // 1 = In use
+                    } else {
+                        $warningDetails[] = "Line <strong>{$lineNum}</strong>: Could not assign user '<strong>{$assignedUser}</strong>'";
+                    }
+                } else {
+                    $warningDetails[] = "Line <strong>{$lineNum}</strong>: User '<strong>{$assignedUser}</strong>' not found";
+                }
+            } elseif ($equipmentId && empty($assignedUser)) {
+                // Dacă nu există responsabil, asigură-te că echipamentul este în stoc
+                EquipmentTable::update($equipmentId, ['STARE_ENUM' => '2']); // 2 = In stock
+            }
+            
         } catch (Exception $e) {
             $errors++;
-            $errorDetails[] = "Line {$lineNum}: " . $e->getMessage();
+            $errorDetails[] = "Line <strong>{$lineNum}</strong>: " . $e->getMessage();
         }
     }
     fclose($handle);
     
-    $importMessage = "Import completed: <strong>{$imported}</strong> records added, <strong>{$errors}</strong> errors.<br>";
-    $importMessage .= "Detected separator: <strong>{$separatorName}</strong><br>";
-    if (!empty($errorDetails)) {
-        $importMessage .= "<br><strong>Details:</strong><br>" . implode("<br>", array_slice($errorDetails, 0, 15));
+    // ========== CONSTRUIEȘTE MESAJUL ==========
+    $importMessage = "Import completed:<br>";
+    $importMessage .= "✅ <strong>{$imported}</strong> records added<br>";
+    $importMessage .= "🔄 <strong>{$updated}</strong> records updated<br>";
+    $importMessage .= "❌ <strong>{$errors}</strong> errors<br>";
+    $importMessage .= "📊 Detected separator: <strong>{$separatorName}</strong><br>";
+    
+    if (!empty($warningDetails)) {
+        $importMessage .= "<br><strong>⚠️ Warnings:</strong><br>" . implode("<br>", array_slice($warningDetails, 0, 15));
+        if (count($warningDetails) > 15) {
+            $importMessage .= "<br>... and " . (count($warningDetails) - 15) . " more warnings";
+        }
     }
     
-    if ($imported > 0) {
+    if (!empty($errorDetails)) {
+        $importMessage .= "<br><br><strong>❌ Errors:</strong><br>" . implode("<br>", array_slice($errorDetails, 0, 15));
+        if (count($errorDetails) > 15) {
+            $importMessage .= "<br>... and " . (count($errorDetails) - 15) . " more errors";
+        }
+    }
+    
+    if ($imported > 0 || $updated > 0) {
         CAdminMessage::ShowNote($importMessage);
     } else {
-        CAdminMessage::ShowMessage($importMessage);
+        CAdminMessage::ShowMessage([
+            'MESSAGE' => $importMessage,
+            'TYPE' => 'ERROR',
+            'HTML' => true
+        ]);
     }
 }
 
@@ -536,10 +693,12 @@ $totalEquipment = EquipmentTable::getCount();
 <div class="import-export-box">
     <h3>📥 Import Data</h3>
     <p class="info-text">Import equipment from CSV file. Separator is detected automatically (comma, semicolon or TAB).</p>
+    <p><strong>⚠️ Note:</strong> If an equipment with the same inventory code already exists, it will be <strong>updated</strong> instead of created.</p>
+    <p><strong>ℹ️ Serial number handling:</strong> If a serial number already exists but the inventory code is different, the inventory code will be <strong>appended</strong> to the serial number (e.g., SN12345 → SN12345_PS00006294).</p>
     
     <div class="stats">
-        <strong>⚠️ Important:</strong> Only the following fields are imported: Inventory code, Name, Type, Manufacturer, Model, Serial number, Purchase date, Supplier, Purchase cost, Warranty expiry, Status, Location, Service contract.<br>
-        <small>Fields like ID, Assigned user, Custom fields, Created/Updated by are NOT imported.</small>
+        <strong>📋 Imported fields:</strong> Inventory code, Name, Type, Manufacturer, Model, Serial number, Purchase date, Supplier, Purchase cost, Warranty expiry, Status, Location, Service contract, <strong>Assigned user</strong><br>
+        <small>Fields like ID, Custom fields, Created/Updated by are NOT imported.</small>
     </div>
     
     <form method="POST" enctype="multipart/form-data">
@@ -551,15 +710,17 @@ $totalEquipment = EquipmentTable::getCount();
     
     <div class="import-example">
         <strong>📋 CSV Format Example:</strong>
-ID,Inventory code,Name,Type,Manufacturer,Model,Serial number,Purchase date,Supplier,Purchase cost,Warranty expiry,Status,Location,Service contract
-,PS00006294,Monitor Philips,monitor,Philips,224E,SN12345,2024-01-15,PC Garage,850.00,2027-01-15,2,Office 101,ServiceContract-001
-,PS00006295,Dell XPS 15,Workstation,Dell,XPS 15,SN67890,2024-02-20,Dell Store,2500.00,2027-02-20,1,Birou 201,ServiceContract-002
+ID,Inventory code,Name,Type,Manufacturer,Model,Serial number,Purchase date,Supplier,Purchase cost,Warranty expiry,Status,Location,Service contract,Assigned user
+,PS00006294,Monitor Philips,monitor,Philips,224E,SN12345,2024-01-15,PC Garage,850.00,2027-01-15,2,Office 101,ServiceContract-001,Ion Popescu
+,PS00006295,Dell XPS 15,Workstation,Dell,XPS 15,SN67890,2024-02-20,Dell Store,2500.00,2027-02-20,1,Birou 201,ServiceContract-002,Maria Ionescu
 
 <strong>📌 Status codes:</strong>
 1 = In use  |  2 = In stock  |  3 = In repair  |  4 = Scrapped  |  5 = Lost
 
 <strong>📌 Type codes:</strong>
 Workstation | monitor | multifunctional | peripheral | accessories
+
+<strong>👤 Assigned user:</strong> Can be full name (Ion Popescu) or login (ion.popescu)
     </div>
     
     <p style="margin-top: 10px; font-size: 12px; color: #999;">
