@@ -94,83 +94,165 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['save'])) {
     }
     
     if (empty($fields['COD_INVENTAR'])) {
-        CAdminMessage::ShowMessage("Error: Inventory code is required!");
+        CAdminMessage::ShowMessage([
+            'MESSAGE' => "Error: Inventory code is required!",
+            'TYPE' => 'ERROR'
+        ]);
     } else {
         try {
-            if ($ID) {
-                $result = EquipmentTable::update($ID, $fields);
-                if ($result->isSuccess()) {
-                    CAdminMessage::ShowMessage("Equipment updated successfully!", "OK");
-                } else {
-                    CAdminMessage::ShowMessage("Error: " . implode(", ", $result->getErrorMessages()));
+            $duplicateError = false;
+            $errorMessage = '';
+            
+            // ========== VERIFICĂ DUPLICATE ÎNAINTE DE INSERARE ==========
+            if (!$ID) {
+                // Verifică COD_INVENTAR
+                $existingCode = EquipmentTable::getList([
+                    'filter' => ['=COD_INVENTAR' => $fields['COD_INVENTAR']],
+                    'select' => ['ID']
+                ])->fetch();
+                
+                if ($existingCode) {
+                    $errorMessage = "Error: Inventory code '<strong>{$fields['COD_INVENTAR']}</strong>' already exists! Please use a different code.";
+                    $duplicateError = true;
+                }
+                
+                // Verifică SERIAL_NR dacă este completat
+                if (!$duplicateError && !empty($fields['SERIAL_NR'])) {
+                    $existingSerial = EquipmentTable::getList([
+                        'filter' => ['=SERIAL_NR' => $fields['SERIAL_NR']],
+                        'select' => ['ID']
+                    ])->fetch();
+                    if ($existingSerial) {
+                        $errorMessage = "Error: Serial number '<strong>{$fields['SERIAL_NR']}</strong>' already exists! Please use a different serial number.";
+                        $duplicateError = true;
+                    }
                 }
             } else {
-                $result = EquipmentTable::add($fields);
-                if ($result->isSuccess()) {
-                    $ID = $result->getId();
-                    CAdminMessage::ShowMessage("Equipment added successfully!", "OK");
+                // Pentru editare, verifică dacă codul aparține altui echipament
+                $existingCode = EquipmentTable::getList([
+                    'filter' => [
+                        '=COD_INVENTAR' => $fields['COD_INVENTAR'],
+                        '!=ID' => $ID
+                    ],
+                    'select' => ['ID']
+                ])->fetch();
+                
+                if ($existingCode) {
+                    $errorMessage = "Error: Inventory code '<strong>{$fields['COD_INVENTAR']}</strong>' is already used by another equipment!";
+                    $duplicateError = true;
+                }
+                
+                // Verifică SERIAL_NR dacă este completat
+                if (!$duplicateError && !empty($fields['SERIAL_NR'])) {
+                    $existingSerial = EquipmentTable::getList([
+                        'filter' => [
+                            '=SERIAL_NR' => $fields['SERIAL_NR'],
+                            '!=ID' => $ID
+                        ],
+                        'select' => ['ID']
+                    ])->fetch();
+                    if ($existingSerial) {
+                        $errorMessage = "Error: Serial number '<strong>{$fields['SERIAL_NR']}</strong>' is already used by another equipment!";
+                        $duplicateError = true;
+                    }
+                }
+            }
+            
+            // ========== AFIȘEAZĂ MESAJ DE EROARE DACĂ ESTE CAZUL ==========
+            if ($duplicateError) {
+                CAdminMessage::ShowMessage([
+                    'MESSAGE' => $errorMessage,
+                    'TYPE' => 'ERROR',
+                    'HTML' => true
+                ]);
+            }
+            
+            // ========== CONTINUĂ CU SALVAREA DACĂ NU EXISTĂ EROARE ==========
+            if (!$duplicateError) {
+                if ($ID) {
+                    $result = EquipmentTable::update($ID, $fields);
+                    if ($result->isSuccess()) {
+                        CAdminMessage::ShowNote("Equipment updated successfully!");
+                    } else {
+                        CAdminMessage::ShowMessage([
+                            'MESSAGE' => "Error: " . implode(", ", $result->getErrorMessages()),
+                            'TYPE' => 'ERROR'
+                        ]);
+                    }
                 } else {
-                    CAdminMessage::ShowMessage("Error: " . implode(", ", $result->getErrorMessages()));
+                    $result = EquipmentTable::add($fields);
+                    if ($result->isSuccess()) {
+                        $ID = $result->getId();
+                        CAdminMessage::ShowNote("Equipment added successfully! (ID: {$ID})");
+                    } else {
+                        CAdminMessage::ShowMessage([
+                            'MESSAGE' => "Error: " . implode(", ", $result->getErrorMessages()),
+                            'TYPE' => 'ERROR'
+                        ]);
+                    }
                 }
             }
             
             // ========== AUTO ALLOCATION WHEN RESPONSIBLE USER IS SELECTED ==========
-            $selectedUserId = intval($_POST['RESPONSIBLE_USER'] ?? 0);
-            $currentDate = new Date(); // Data curentă
-            
-            if ($ID && $selectedUserId > 0) {
-                $currentAlloc = AllocationTable::getList([
-                    'filter' => ['=EQUIPMENT_ID' => $ID, '=DATA_RETURNARE' => null],
-                    'select' => ['ID', 'USER_ID']
-                ])->fetch();
+            if (!$duplicateError && $ID) {
+                $selectedUserId = intval($_POST['RESPONSIBLE_USER'] ?? 0);
+                $currentDate = new Date();
                 
-                if ($currentAlloc) {
-                    if ($currentAlloc['USER_ID'] != $selectedUserId) {
-                        // Închide alocarea veche
-                        AllocationTable::update($currentAlloc['ID'], [
-                            'DATA_RETURNARE' => $currentDate,
-                            'MOTIV_RETURNARE' => 'Responsible person changed'
-                        ]);
-                        // Adaugă alocare nouă cu data curentă
+                if ($selectedUserId > 0) {
+                    $currentAlloc = AllocationTable::getList([
+                        'filter' => ['=EQUIPMENT_ID' => $ID, '=DATA_RETURNARE' => null],
+                        'select' => ['ID', 'USER_ID']
+                    ])->fetch();
+                    
+                    if ($currentAlloc) {
+                        if ($currentAlloc['USER_ID'] != $selectedUserId) {
+                            AllocationTable::update($currentAlloc['ID'], [
+                                'DATA_RETURNARE' => $currentDate,
+                                'MOTIV_RETURNARE' => 'Responsible person changed'
+                            ]);
+                            $allocResult = AllocationTable::add([
+                                'EQUIPMENT_ID' => $ID,
+                                'USER_ID' => $selectedUserId,
+                                'DATA_PREDARE' => $currentDate
+                            ]);
+                            if ($allocResult->isSuccess()) {
+                                EquipmentTable::update($ID, ['STARE_ENUM' => '1']);
+                            }
+                        }
+                    } else {
                         $allocResult = AllocationTable::add([
                             'EQUIPMENT_ID' => $ID,
                             'USER_ID' => $selectedUserId,
                             'DATA_PREDARE' => $currentDate
                         ]);
                         if ($allocResult->isSuccess()) {
-                            EquipmentTable::update($ID, ['STARE_ENUM' => '1']); // 1 = In use
+                            EquipmentTable::update($ID, ['STARE_ENUM' => '1']);
                         }
                     }
-                } else {
-                    // Adaugă alocare nouă cu data curentă
-                    $allocResult = AllocationTable::add([
-                        'EQUIPMENT_ID' => $ID,
-                        'USER_ID' => $selectedUserId,
-                        'DATA_PREDARE' => $currentDate
-                    ]);
-                    if ($allocResult->isSuccess()) {
-                        EquipmentTable::update($ID, ['STARE_ENUM' => '1']); // 1 = In use
+                } elseif ($selectedUserId == 0) {
+                    $currentAlloc = AllocationTable::getList([
+                        'filter' => ['=EQUIPMENT_ID' => $ID, '=DATA_RETURNARE' => null],
+                        'select' => ['ID']
+                    ])->fetch();
+                    if ($currentAlloc) {
+                        AllocationTable::update($currentAlloc['ID'], [
+                            'DATA_RETURNARE' => $currentDate,
+                            'MOTIV_RETURNARE' => 'Released'
+                        ]);
+                        EquipmentTable::update($ID, ['STARE_ENUM' => '2']);
                     }
-                }
-            } elseif ($ID && $selectedUserId == 0) {
-                $currentAlloc = AllocationTable::getList([
-                    'filter' => ['=EQUIPMENT_ID' => $ID, '=DATA_RETURNARE' => null],
-                    'select' => ['ID']
-                ])->fetch();
-                if ($currentAlloc) {
-                    AllocationTable::update($currentAlloc['ID'], [
-                        'DATA_RETURNARE' => $currentDate,
-                        'MOTIV_RETURNARE' => 'Released'
-                    ]);
-                    EquipmentTable::update($ID, ['STARE_ENUM' => '2']); // 2 = In stock
                 }
             }
             
-            if ($ID && isset($result) && $result->isSuccess()) {
+            if ($ID && !$duplicateError && isset($result) && $result->isSuccess()) {
+                // Redirecționează doar dacă nu există erori
                 LocalRedirect("/bitrix/admin/bitrix_inventar_equipment_list.php");
             }
         } catch (Exception $e) {
-            CAdminMessage::ShowMessage("Error: " . $e->getMessage());
+            CAdminMessage::ShowMessage([
+                'MESSAGE' => "Error: " . $e->getMessage(),
+                'TYPE' => 'ERROR'
+            ]);
         }
     }
 }
@@ -280,7 +362,10 @@ function updateAllocationInfo() {
     <table class="edit-table" width="100%">
         <tr>
             <td width="200"><span style="color:red;">*</span> Inventory code:</td>
-            <td><input type="text" name="COD_INVENTAR" value="<?= htmlspecialchars($equipment['COD_INVENTAR'] ?? '') ?>" size="30" required></td>
+            <td>
+                <input type="text" name="COD_INVENTAR" value="<?= htmlspecialchars($equipment['COD_INVENTAR'] ?? '') ?>" size="30" required>
+                <br><small style="color:#666;">Must be unique. If already exists, you will be notified.</small>
+            </td>
         </tr>
         <tr>
             <td>Name:</td>
@@ -307,7 +392,10 @@ function updateAllocationInfo() {
         </tr>
         <tr>
             <td>Serial number:</td>
-            <td><input type="text" name="SERIAL_NR" value="<?= htmlspecialchars($equipment['SERIAL_NR'] ?? '') ?>" size="40"></td>
+            <td>
+                <input type="text" name="SERIAL_NR" value="<?= htmlspecialchars($equipment['SERIAL_NR'] ?? '') ?>" size="40">
+                <br><small style="color:#666;">Must be unique. If already exists, you will be notified.</small>
+            </td>
         </tr>
         <tr>
             <td>Purchase date:<br><small>(YYYY-MM-DD)</small></td>
