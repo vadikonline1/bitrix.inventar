@@ -9,6 +9,7 @@ use Bitrix\Inventar\AllocationTable;
 use Bitrix\Inventar\TypesTable;
 use Bitrix\Inventar\StatusTable;
 use Bitrix\Main\Type\Date;
+use Bitrix\Main\Type\DateTime;
 
 Loader::includeModule('bitrix.inventar');
 
@@ -109,13 +110,16 @@ if (isset($_GET['export']) && $_GET['export'] == 'excel') {
         $row[] = $item['MODEL'] ?? '';
         $row[] = $item['SERIAL_NR'] ?? '';
         
-        // Date
+        // ========== MODIFICARE: AFIȘARE DIRECT DIN DB ==========
+        // Purchase date
         $dataAchizitie = '';
         if (!empty($item['DATA_ACHIZITIE'])) {
             if ($item['DATA_ACHIZITIE'] instanceof Date) {
                 $dataAchizitie = $item['DATA_ACHIZITIE']->format('Y-m-d');
+            } elseif ($item['DATA_ACHIZITIE'] instanceof DateTime) {
+                $dataAchizitie = $item['DATA_ACHIZITIE']->format('Y-m-d');
             } else {
-                $dataAchizitie = date('Y-m-d', strtotime($item['DATA_ACHIZITIE']));
+                $dataAchizitie = $item['DATA_ACHIZITIE'];
             }
         }
         $row[] = $dataAchizitie;
@@ -123,12 +127,15 @@ if (isset($_GET['export']) && $_GET['export'] == 'excel') {
         $row[] = $item['FURNIZOR'] ?? '';
         $row[] = $item['COST_ACHIZITIE'] ?? '';
         
+        // Warranty expiry
         $dataExpirare = '';
         if (!empty($item['DATA_EXPIRARE_GARANTIE'])) {
             if ($item['DATA_EXPIRARE_GARANTIE'] instanceof Date) {
                 $dataExpirare = $item['DATA_EXPIRARE_GARANTIE']->format('Y-m-d');
+            } elseif ($item['DATA_EXPIRARE_GARANTIE'] instanceof DateTime) {
+                $dataExpirare = $item['DATA_EXPIRARE_GARANTIE']->format('Y-m-d');
             } else {
-                $dataExpirare = date('Y-m-d', strtotime($item['DATA_EXPIRARE_GARANTIE']));
+                $dataExpirare = $item['DATA_EXPIRARE_GARANTIE'];
             }
         }
         $row[] = $dataExpirare;
@@ -150,7 +157,7 @@ if (isset($_GET['export']) && $_GET['export'] == 'excel') {
         }
         $row[] = $createdBy;
         
-        $row[] = $item['CREATED_AT'] instanceof \Bitrix\Main\Type\DateTime ? $item['CREATED_AT']->format('Y-m-d H:i:s') : '';
+        $row[] = $item['CREATED_AT'] instanceof DateTime ? $item['CREATED_AT']->format('Y-m-d H:i:s') : '';
         
         // Updated by
         $updatedBy = '';
@@ -162,7 +169,7 @@ if (isset($_GET['export']) && $_GET['export'] == 'excel') {
             }
         }
         $row[] = $updatedBy;
-        $row[] = $item['UPDATED_AT'] instanceof \Bitrix\Main\Type\DateTime ? $item['UPDATED_AT']->format('Y-m-d H:i:s') : '';
+        $row[] = $item['UPDATED_AT'] instanceof DateTime ? $item['UPDATED_AT']->format('Y-m-d H:i:s') : '';
         
         // Câmpuri personalizate
         $customData = [];
