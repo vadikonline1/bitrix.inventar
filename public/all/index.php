@@ -118,28 +118,19 @@ if (isset($_GET['export']) && $_GET['export'] == 'excel') {
         $row[] = $item['MODEL'] ?? '';
         $row[] = $item['SERIAL_NR'] ?? '';
         
-        // Date
-        $dataAchizitie = '';
-        if (!empty($item['DATA_ACHIZITIE'])) {
-            if ($item['DATA_ACHIZITIE'] instanceof Date) {
-                $dataAchizitie = $item['DATA_ACHIZITIE']->format('Y-m-d');
-            } else {
-                $dataAchizitie = date('Y-m-d', strtotime($item['DATA_ACHIZITIE']));
-            }
-        }
+        // ========== MODIFICARE: AFIȘARE DIRECT DIN DB ==========
+        // Afișăm data exact cum este în baza de date (YYYY-MM-DD)
+        $dataAchizitie = $item['DATA_ACHIZITIE'] instanceof Date 
+            ? $item['DATA_ACHIZITIE']->format('Y-m-d')
+            : ($item['DATA_ACHIZITIE'] ?: '');
         $row[] = $dataAchizitie;
         
         $row[] = $item['FURNIZOR'] ?? '';
         $row[] = $item['COST_ACHIZITIE'] ?? '';
         
-        $dataExpirare = '';
-        if (!empty($item['DATA_EXPIRARE_GARANTIE'])) {
-            if ($item['DATA_EXPIRARE_GARANTIE'] instanceof Date) {
-                $dataExpirare = $item['DATA_EXPIRARE_GARANTIE']->format('Y-m-d');
-            } else {
-                $dataExpirare = date('Y-m-d', strtotime($item['DATA_EXPIRARE_GARANTIE']));
-            }
-        }
+        $dataExpirare = $item['DATA_EXPIRARE_GARANTIE'] instanceof Date 
+            ? $item['DATA_EXPIRARE_GARANTIE']->format('Y-m-d')
+            : ($item['DATA_EXPIRARE_GARANTIE'] ?: '');
         $row[] = $dataExpirare;
         
         $row[] = $item['STARE_ENUM'];
@@ -333,13 +324,50 @@ $exportUrl = '?' . http_build_query($exportParams);
         <table class="equipment-table">
             <thead><tr><th>ID</th><th>Inventory code</th><th>Name</th><th>Type</th><th>Manufacturer</th><th>Model</th><th>Serial</th><th>Purchase date</th><th>Supplier</th><th>Cost</th><th>Warranty</th><th>Status</th><th>Location</th><th>Contract</th><th>Responsible</th><th>Actions</th></tr></thead>
             <tbody><?php foreach ($list as $item): $userId = AllocationTable::getCurrentUserForEquipment($item['ID']); $userName = ''; if ($userId && isset($arUsers[$userId])) $userName = $arUsers[$userId]; elseif ($userId) { $user = \Bitrix\Main\UserTable::getById($userId)->fetch(); $userName = trim($user['NAME'] . ' ' . $user['LAST_NAME']) ?: $user['LOGIN']; } ?>
-            <tr><td><?= $item['ID'] ?></td><td><strong><?= htmlspecialchars($item['COD_INVENTAR']) ?></strong></td><td><?= htmlspecialchars($item['DENUMIRE'] ?: '-') ?></td><td><?= htmlspecialchars($tipText[$item['TIP_ENUM']] ?? $item['TIP_ENUM']) ?></td><td><?= htmlspecialchars($item['PRODUCATOR'] ?: '-') ?></td><td><?= htmlspecialchars($item['MODEL'] ?: '-') ?></td><td><code><?= htmlspecialchars($item['SERIAL_NR'] ?: '-') ?></code></td><td><?= $item['DATA_ACHIZITIE'] ? date('d.m.Y', strtotime($item['DATA_ACHIZITIE'])) : '-' ?></td><td><?= htmlspecialchars($item['FURNIZOR'] ?: '-') ?></td><td><?= $item['COST_ACHIZITIE'] ? number_format($item['COST_ACHIZITIE'], 2) : '-' ?> lei</td><td><?= $item['DATA_EXPIRARE_GARANTIE'] ? date('d.m.Y', strtotime($item['DATA_EXPIRARE_GARANTIE'])) : '-' ?></td><td><span class="status-badge" style="background:<?= $stareInfo[$item['STARE_ENUM']]['color'] ?? '#666' ?>"><?= htmlspecialchars($stareInfo[$item['STARE_ENUM']]['name'] ?? $item['STARE_ENUM']) ?></span></td><td><?= htmlspecialchars($item['LOCATIE'] ?: '-') ?></td><td><?= htmlspecialchars($item['CONTRACT_SERVICE'] ?: '-') ?></td><td><?= htmlspecialchars($userName ?: '-') ?></td><td><div class="action-buttons" style="display: flex; gap: 6px;"><a href="/inventar/edit/?id=<?= $item['ID'] ?>&back=all" class="btn btn-edit">✏️ Edit</a><a href="/inventar/?id=<?= $item['ID'] ?>&back=all" class="btn btn-details">🔍 Details</a></div></td></tr><?php endforeach; ?></tbody>
+            <tr>
+                <td><?= $item['ID'] ?></td>
+                <td><strong><?= htmlspecialchars($item['COD_INVENTAR']) ?></strong></td>
+                <td><?= htmlspecialchars($item['DENUMIRE'] ?: '-') ?></td>
+                <td><?= htmlspecialchars($tipText[$item['TIP_ENUM']] ?? $item['TIP_ENUM']) ?></td>
+                <td><?= htmlspecialchars($item['PRODUCATOR'] ?: '-') ?></td>
+                <td><?= htmlspecialchars($item['MODEL'] ?: '-') ?></td>
+                <td><code><?= htmlspecialchars($item['SERIAL_NR'] ?: '-') ?></code></td>
+                <!-- ========== MODIFICARE: AFIȘARE DIRECT DIN DB ========== -->
+                <td><?= $item['DATA_ACHIZITIE'] ?: '-' ?></td>
+                <td><?= htmlspecialchars($item['FURNIZOR'] ?: '-') ?></td>
+                <td><?= $item['COST_ACHIZITIE'] ? number_format($item['COST_ACHIZITIE'], 2) : '-' ?> lei</td>
+                <td><?= $item['DATA_EXPIRARE_GARANTIE'] ?: '-' ?></td>
+                <td><span class="status-badge" style="background:<?= $stareInfo[$item['STARE_ENUM']]['color'] ?? '#666' ?>"><?= htmlspecialchars($stareInfo[$item['STARE_ENUM']]['name'] ?? $item['STARE_ENUM']) ?></span></td>
+                <td><?= htmlspecialchars($item['LOCATIE'] ?: '-') ?></td>
+                <td><?= htmlspecialchars($item['CONTRACT_SERVICE'] ?: '-') ?></td>
+                <td><?= htmlspecialchars($userName ?: '-') ?></td>
+                <td><div class="action-buttons" style="display: flex; gap: 6px;"><a href="/inventar/edit/?id=<?= $item['ID'] ?>&back=all" class="btn btn-edit">✏️ Edit</a><a href="/inventar/?id=<?= $item['ID'] ?>&back=all" class="btn btn-details">🔍 Details</a></div></td>
+            </tr><?php endforeach; ?></tbody>
         </table>
     </div>
     
     <div class="card-view">
         <?php foreach ($list as $item): $userId = AllocationTable::getCurrentUserForEquipment($item['ID']); $userName = ''; if ($userId && isset($arUsers[$userId])) $userName = $arUsers[$userId]; elseif ($userId) { $user = \Bitrix\Main\UserTable::getById($userId)->fetch(); $userName = trim($user['NAME'] . ' ' . $user['LAST_NAME']) ?: $user['LOGIN']; } ?>
-        <div class="equipment-card"><div class="card-header"><h3><?= htmlspecialchars($item['DENUMIRE'] ?: 'No name') ?></h3><div class="card-cod">Code: <?= htmlspecialchars($item['COD_INVENTAR']) ?></div></div><div class="card-body"><div class="card-row"><span class="label">ID:</span><span class="value"><?= $item['ID'] ?></span></div><div class="card-row"><span class="label">Type:</span><span class="value"><?= htmlspecialchars($tipText[$item['TIP_ENUM']] ?? $item['TIP_ENUM']) ?></span></div><div class="card-row"><span class="label">Manufacturer:</span><span class="value"><?= htmlspecialchars($item['PRODUCATOR'] ?: '-') ?></span></div><div class="card-row"><span class="label">Model:</span><span class="value"><?= htmlspecialchars($item['MODEL'] ?: '-') ?></span></div><div class="card-row"><span class="label">Serial:</span><span class="value"><code><?= htmlspecialchars($item['SERIAL_NR'] ?: '-') ?></code></span></div><div class="card-row"><span class="label">Purchase date:</span><span class="value"><?= $item['DATA_ACHIZITIE'] ? date('d.m.Y', strtotime($item['DATA_ACHIZITIE'])) : '-' ?></span></div><div class="card-row"><span class="label">Supplier:</span><span class="value"><?= htmlspecialchars($item['FURNIZOR'] ?: '-') ?></span></div><div class="card-row"><span class="label">Cost:</span><span class="value"><?= $item['COST_ACHIZITIE'] ? number_format($item['COST_ACHIZITIE'], 2) . ' lei' : '-' ?></span></div><div class="card-row"><span class="label">Warranty:</span><span class="value"><?= $item['DATA_EXPIRARE_GARANTIE'] ? date('d.m.Y', strtotime($item['DATA_EXPIRARE_GARANTIE'])) : '-' ?></span></div><div class="card-row"><span class="label">Status:</span><span class="value"><span class="status-badge" style="background:<?= $stareInfo[$item['STARE_ENUM']]['color'] ?? '#666' ?>"><?= htmlspecialchars($stareInfo[$item['STARE_ENUM']]['name'] ?? $item['STARE_ENUM']) ?></span></span></div><div class="card-row"><span class="label">Location:</span><span class="value"><?= htmlspecialchars($item['LOCATIE'] ?: '-') ?></span></div><div class="card-row"><span class="label">Service contract:</span><span class="value"><?= htmlspecialchars($item['CONTRACT_SERVICE'] ?: '-') ?></span></div><div class="card-row"><span class="label">Responsible:</span><span class="value"><?= htmlspecialchars($userName ?: '-') ?></span></div></div><div class="card-footer"><a href="/inventar/edit/?id=<?= $item['ID'] ?>&back=all" class="btn btn-edit">✏️ Edit</a><a href="/inventar/?id=<?= $item['ID'] ?>&back=all" class="btn btn-details">🔍 Details</a></div></div>
+        <div class="equipment-card">
+            <div class="card-header"><h3><?= htmlspecialchars($item['DENUMIRE'] ?: 'No name') ?></h3><div class="card-cod">Code: <?= htmlspecialchars($item['COD_INVENTAR']) ?></div></div>
+            <div class="card-body">
+                <div class="card-row"><span class="label">ID:</span><span class="value"><?= $item['ID'] ?></span></div>
+                <div class="card-row"><span class="label">Type:</span><span class="value"><?= htmlspecialchars($tipText[$item['TIP_ENUM']] ?? $item['TIP_ENUM']) ?></span></div>
+                <div class="card-row"><span class="label">Manufacturer:</span><span class="value"><?= htmlspecialchars($item['PRODUCATOR'] ?: '-') ?></span></div>
+                <div class="card-row"><span class="label">Model:</span><span class="value"><?= htmlspecialchars($item['MODEL'] ?: '-') ?></span></div>
+                <div class="card-row"><span class="label">Serial:</span><span class="value"><code><?= htmlspecialchars($item['SERIAL_NR'] ?: '-') ?></code></span></div>
+                <!-- ========== MODIFICARE: AFIȘARE DIRECT DIN DB ========== -->
+                <div class="card-row"><span class="label">Purchase date:</span><span class="value"><?= $item['DATA_ACHIZITIE'] ?: '-' ?></span></div>
+                <div class="card-row"><span class="label">Supplier:</span><span class="value"><?= htmlspecialchars($item['FURNIZOR'] ?: '-') ?></span></div>
+                <div class="card-row"><span class="label">Cost:</span><span class="value"><?= $item['COST_ACHIZITIE'] ? number_format($item['COST_ACHIZITIE'], 2) . ' lei' : '-' ?></span></div>
+                <div class="card-row"><span class="label">Warranty:</span><span class="value"><?= $item['DATA_EXPIRARE_GARANTIE'] ?: '-' ?></span></div>
+                <div class="card-row"><span class="label">Status:</span><span class="value"><span class="status-badge" style="background:<?= $stareInfo[$item['STARE_ENUM']]['color'] ?? '#666' ?>"><?= htmlspecialchars($stareInfo[$item['STARE_ENUM']]['name'] ?? $item['STARE_ENUM']) ?></span></span></div>
+                <div class="card-row"><span class="label">Location:</span><span class="value"><?= htmlspecialchars($item['LOCATIE'] ?: '-') ?></span></div>
+                <div class="card-row"><span class="label">Service contract:</span><span class="value"><?= htmlspecialchars($item['CONTRACT_SERVICE'] ?: '-') ?></span></div>
+                <div class="card-row"><span class="label">Responsible:</span><span class="value"><?= htmlspecialchars($userName ?: '-') ?></span></div>
+            </div>
+            <div class="card-footer"><a href="/inventar/edit/?id=<?= $item['ID'] ?>&back=all" class="btn btn-edit">✏️ Edit</a><a href="/inventar/?id=<?= $item['ID'] ?>&back=all" class="btn btn-details">🔍 Details</a></div>
+        </div>
         <?php endforeach; ?>
     </div>
     
