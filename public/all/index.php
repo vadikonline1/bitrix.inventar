@@ -201,8 +201,8 @@ $countSql = "SELECT COUNT(*) as CNT FROM b_bitrix_inventar_equipment e WHERE 1=1
 
 if (!empty($search)) {
     $searchTerm = $connection->getSqlHelper()->forSql('%' . $search . '%');
-    $sql .= " AND (e.COD_INVENTAR LIKE '{$searchTerm}' OR e.DENUMIRE LIKE '{$searchTerm}' OR e.SERIAL_NR LIKE '{$searchTerm}')";
-    $countSql .= " AND (e.COD_INVENTAR LIKE '{$searchTerm}' OR e.DENUMIRE LIKE '{$searchTerm}' OR e.SERIAL_NR LIKE '{$searchTerm}')";
+    $sql .= " AND (e.COD_INVENTAR LIKE '{$searchTerm}' OR e.DENUMIRE LIKE '{$searchTerm}' OR e.SERIAL_NR LIKE '{$searchTerm}' OR e.ASSET_UUID LIKE '{$searchTerm}')";
+    $countSql .= " AND (e.COD_INVENTAR LIKE '{$searchTerm}' OR e.DENUMIRE LIKE '{$searchTerm}' OR e.SERIAL_NR LIKE '{$searchTerm}' OR e.ASSET_UUID LIKE '{$searchTerm}')";
 }
 if (!empty($filterTip)) {
     $sql .= " AND e.TIP_ENUM = '" . $connection->getSqlHelper()->forSql($filterTip) . "'";
@@ -310,7 +310,7 @@ $exportUrl = '?' . http_build_query($exportParams);
     
     <form method="GET" class="filter-bar">
         <div class="filter-row">
-            <div class="filter-group" style="flex:2;"><label>🔍 Search (code, name, serial)</label><input type="text" name="search" value="<?= htmlspecialchars($search) ?>" placeholder="Search..." style="width: 95%;"></div>
+            <div class="filter-group" style="flex:2;"><label>🔍 Search (code, name, serial, asset UUID)</label><input type="text" name="search" value="<?= htmlspecialchars($search) ?>" placeholder="Search..." style="width: 95%;"></div>
             <div class="filter-group"><label>📁 Type</label><select name="filter_tip"><option value="">All</option><?php foreach ($allTipuri as $val => $name): ?><option value="<?= $val ?>" <?= ($filterTip == $val) ? 'selected' : '' ?>><?= htmlspecialchars($name) ?></option><?php endforeach; ?></select></div>
             <div class="filter-group"><label>📍 Location</label><select name="filter_locatie"><option value="">All</option><?php foreach ($allLocatii as $loc): ?><option value="<?= htmlspecialchars($loc) ?>" <?= ($filterLocatie == $loc) ? 'selected' : '' ?>><?= htmlspecialchars($loc) ?></option><?php endforeach; ?></select></div>
             <div class="filter-group"><label>⚙️ Status</label><select name="filter_status"><option value="">All</option><?php foreach ($allStari as $val => $info): ?><option value="<?= $val ?>" <?= ($filterStatus == $val) ? 'selected' : '' ?>><?= htmlspecialchars($info['name']) ?></option><?php endforeach; ?></select></div>
@@ -322,7 +322,7 @@ $exportUrl = '?' . http_build_query($exportParams);
     <?php if (count($list) > 0): ?>
     <div class="table-view">
         <table class="equipment-table">
-            <thead><tr><th>ID</th><th>Inventory code</th><th>Name</th><th>Type</th><th>Manufacturer</th><th>Model</th><th>Serial</th><th>Purchase date</th><th>Supplier</th><th>Cost</th><th>Warranty</th><th>Status</th><th>Location</th><th>Contract</th><th>Responsible</th><th>Actions</th></tr></thead>
+            <thead><tr><th>ID</th><th>Inventory code</th><th>Name</th><th>Type</th><th>Manufacturer</th><th>Model</th><th>Serial</th><th>Asset UUID</th><th>Purchase date</th><th>Supplier</th><th>Cost</th><th>Warranty</th><th>Status</th><th>Location</th><th>E-Factura</th><th>Responsible</th><th>Actions</th></tr></thead>
             <tbody><?php foreach ($list as $item): $userId = AllocationTable::getCurrentUserForEquipment($item['ID']); $userName = ''; if ($userId && isset($arUsers[$userId])) $userName = $arUsers[$userId]; elseif ($userId) { $user = \Bitrix\Main\UserTable::getById($userId)->fetch(); $userName = trim($user['NAME'] . ' ' . $user['LAST_NAME']) ?: $user['LOGIN']; } ?>
             <tr>
                 <td><?= $item['ID'] ?></td>
@@ -332,10 +332,11 @@ $exportUrl = '?' . http_build_query($exportParams);
                 <td><?= htmlspecialchars($item['PRODUCATOR'] ?: '-') ?></td>
                 <td><?= htmlspecialchars($item['MODEL'] ?: '-') ?></td>
                 <td><code><?= htmlspecialchars($item['SERIAL_NR'] ?: '-') ?></code></td>
+                <td><code><?= htmlspecialchars($item['ASSET_UUID'] ?: '-') ?></code></td>
                 <!-- ========== MODIFICARE: AFIȘARE DIRECT DIN DB ========== -->
                 <td><?= $item['DATA_ACHIZITIE'] ?: '-' ?></td>
                 <td><?= htmlspecialchars($item['FURNIZOR'] ?: '-') ?></td>
-                <td><?= $item['COST_ACHIZITIE'] ? number_format($item['COST_ACHIZITIE'], 2) : '-' ?> lei</td>
+                <td><?= $item['COST_ACHIZITIE'] ? number_format($item['COST_ACHIZITIE'], 2) : '-' ?></td>
                 <td><?= $item['DATA_EXPIRARE_GARANTIE'] ?: '-' ?></td>
                 <td><span class="status-badge" style="background:<?= $stareInfo[$item['STARE_ENUM']]['color'] ?? '#666' ?>"><?= htmlspecialchars($stareInfo[$item['STARE_ENUM']]['name'] ?? $item['STARE_ENUM']) ?></span></td>
                 <td><?= htmlspecialchars($item['LOCATIE'] ?: '-') ?></td>
@@ -356,14 +357,15 @@ $exportUrl = '?' . http_build_query($exportParams);
                 <div class="card-row"><span class="label">Manufacturer:</span><span class="value"><?= htmlspecialchars($item['PRODUCATOR'] ?: '-') ?></span></div>
                 <div class="card-row"><span class="label">Model:</span><span class="value"><?= htmlspecialchars($item['MODEL'] ?: '-') ?></span></div>
                 <div class="card-row"><span class="label">Serial:</span><span class="value"><code><?= htmlspecialchars($item['SERIAL_NR'] ?: '-') ?></code></span></div>
+                <div class="card-row"><span class="label">Asset UUID:</span><span class="value"><code><?= htmlspecialchars($item['ASSET_UUID'] ?: '-') ?></code></span></div>
                 <!-- ========== MODIFICARE: AFIȘARE DIRECT DIN DB ========== -->
                 <div class="card-row"><span class="label">Purchase date:</span><span class="value"><?= $item['DATA_ACHIZITIE'] ?: '-' ?></span></div>
                 <div class="card-row"><span class="label">Supplier:</span><span class="value"><?= htmlspecialchars($item['FURNIZOR'] ?: '-') ?></span></div>
-                <div class="card-row"><span class="label">Cost:</span><span class="value"><?= $item['COST_ACHIZITIE'] ? number_format($item['COST_ACHIZITIE'], 2) . ' lei' : '-' ?></span></div>
+                <div class="card-row"><span class="label">Cost:</span><span class="value"><?= $item['COST_ACHIZITIE'] ? number_format($item['COST_ACHIZITIE'], 2) : '-' ?></span></div>
                 <div class="card-row"><span class="label">Warranty:</span><span class="value"><?= $item['DATA_EXPIRARE_GARANTIE'] ?: '-' ?></span></div>
                 <div class="card-row"><span class="label">Status:</span><span class="value"><span class="status-badge" style="background:<?= $stareInfo[$item['STARE_ENUM']]['color'] ?? '#666' ?>"><?= htmlspecialchars($stareInfo[$item['STARE_ENUM']]['name'] ?? $item['STARE_ENUM']) ?></span></span></div>
                 <div class="card-row"><span class="label">Location:</span><span class="value"><?= htmlspecialchars($item['LOCATIE'] ?: '-') ?></span></div>
-                <div class="card-row"><span class="label">Service contract:</span><span class="value"><?= htmlspecialchars($item['CONTRACT_SERVICE'] ?: '-') ?></span></div>
+                <div class="card-row"><span class="label">E-Factura:</span><span class="value"><?= htmlspecialchars($item['CONTRACT_SERVICE'] ?: '-') ?></span></div>
                 <div class="card-row"><span class="label">Responsible:</span><span class="value"><?= htmlspecialchars($userName ?: '-') ?></span></div>
             </div>
             <div class="card-footer"><a href="/inventar/edit/?id=<?= $item['ID'] ?>&back=all" class="btn btn-edit">✏️ Edit</a><a href="/inventar/?id=<?= $item['ID'] ?>&back=all" class="btn btn-details">🔍 Details</a></div>

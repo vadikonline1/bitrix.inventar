@@ -55,6 +55,7 @@ if (isset($_GET['export']) && $_GET['export'] == 'excel') {
         'Manufacturer',
         'Model',
         'Serial number',
+        'Asset UUID',
         'Purchase date',
         'Supplier',
         'Purchase cost',
@@ -109,6 +110,7 @@ if (isset($_GET['export']) && $_GET['export'] == 'excel') {
         $row[] = $item['PRODUCATOR'] ?? '';
         $row[] = $item['MODEL'] ?? '';
         $row[] = $item['SERIAL_NR'] ?? '';
+        $row[] = $item['ASSET_UUID'] ?? '';
         
         // ========== MODIFICARE: AFIȘARE DIRECT DIN DB ==========
         // Purchase date
@@ -224,6 +226,8 @@ function detectSeparator($filePath) {
 }
 
 // Function to convert date to Bitrix Date object
+// Foloseste \DateTime nativ pentru parsare (Bitrix\Main\Type\DateTime nu are
+// createFromFormat in toate versiunile), apoi construieste Bitrix Date din Y-m-d.
 function convertToBitrixDate($dateString) {
     if (empty($dateString)) return null;
     
@@ -244,20 +248,20 @@ function convertToBitrixDate($dateString) {
     ];
     
     foreach ($formats as $format) {
-        $dateTime = DateTime::createFromFormat($format, $dateString);
+        $dateTime = \DateTime::createFromFormat($format, $dateString);
         if ($dateTime !== false && $dateTime->format($format) === $dateString) {
-            if (checkdate($dateTime->format('m'), $dateTime->format('d'), $dateTime->format('Y'))) {
-                return Date::createFromPhp($dateTime);
+            if (checkdate((int)$dateTime->format('m'), (int)$dateTime->format('d'), (int)$dateTime->format('Y'))) {
+                return new Date($dateTime->format('Y-m-d'), 'Y-m-d');
             }
         }
     }
     
     $timestamp = strtotime($dateString);
     if ($timestamp !== false && $timestamp > 0) {
-        $dateTime = new DateTime();
-        $dateTime->setTimestamp($timestamp);
-        if (checkdate($dateTime->format('m'), $dateTime->format('d'), $dateTime->format('Y'))) {
-            return Date::createFromPhp($dateTime);
+        $ymd = date('Y-m-d', $timestamp);
+        $parts = explode('-', $ymd);
+        if (checkdate((int)$parts[1], (int)$parts[2], (int)$parts[0])) {
+            return new Date($ymd, 'Y-m-d');
         }
     }
     
@@ -303,6 +307,16 @@ function findUserByName($userName) {
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['import_file']) && $_FILES['import_file']['error'] == 0) {
     $file = $_FILES['import_file']['tmp_name'];
     $fileName = $_FILES['import_file']['name'];
+
+    // Self-heal: sirurile goale '' in coloanele unice blocheaza inserturile
+    // ('' se duplica, NULL nu). Normalizeaza la NULL inainte de import.
+    try {
+        $connection = Application::getConnection();
+        $connection->queryExecute("UPDATE b_bitrix_inventar_equipment SET ASSET_UUID = NULL WHERE ASSET_UUID = ''");
+        $connection->queryExecute("UPDATE b_bitrix_inventar_equipment SET SERIAL_NR = NULL WHERE SERIAL_NR = ''");
+    } catch (\Exception $e) {
+        // Daca coloanele nu exista inca, ignoram (importul va raporta erorile real)
+    }
     
     $separator = detectSeparator($file);
     $separatorName = $separator == ',' ? 'comma (,)' : ($separator == ';' ? 'semicolon (;)' : 'TAB');
@@ -314,6 +328,25 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['import_file']) && $_F
     // Obține header-ul pentru a mapa coloanele
     $headerRow = null;
     $columnMap = [];
+
+    // Dictionare canonice CODE/ID + NAME (lowercase) → CODE, pentru normalizarea
+    // valorilor din CSV (ex: 'monitor'/'Monitor' → '2').
+    $canonicalTypes = [];
+    try {
+        foreach (TypesTable::getList()->fetchAll() as $t) {
+            $canonicalTypes[(string)$t['CODE']] = (string)$t['CODE'];
+            $canonicalTypes[mb_strtolower(trim((string)$t['CODE']))] = (string)$t['CODE'];
+            $canonicalTypes[mb_strtolower(trim((string)$t['NAME']))] = (string)$t['CODE'];
+        }
+    } catch (\Exception $e) {}
+    $canonicalStatuses = [];
+    try {
+        foreach (StatusTable::getList()->fetchAll() as $s) {
+            $canonicalStatuses[(string)$s['CODE']] = (string)$s['CODE'];
+            $canonicalStatuses[mb_strtolower(trim((string)$s['CODE']))] = (string)$s['CODE'];
+            $canonicalStatuses[mb_strtolower(trim((string)$s['NAME']))] = (string)$s['CODE'];
+        }
+    } catch (\Exception $e) {}
     
     while (($data = fgetcsv($handle, 10000, $separator)) !== FALSE) {
         $lineNum++;
@@ -340,6 +373,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['import_file']) && $_F
                 'PRODUCATOR' => array_search('Manufacturer', $headerRow),
                 'MODEL' => array_search('Model', $headerRow),
                 'SERIAL_NR' => array_search('Serial number', $headerRow),
+                'ASSET_UUID' => array_search('Asset UUID', $headerRow),
                 'DATA_ACHIZITIE' => array_search('Purchase date', $headerRow),
                 'FURNIZOR' => array_search('Supplier', $headerRow),
                 'COST_ACHIZITIE' => array_search('Purchase cost', $headerRow),
@@ -363,7 +397,20 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['import_file']) && $_F
         $denumire = trim($data[$columnMap['DENUMIRE']] ?? '');
         $tipEnum = trim($data[$columnMap['TIP_ENUM']] ?? '');
         $serialNr = isset($columnMap['SERIAL_NR']) ? trim($data[$columnMap['SERIAL_NR']] ?? '') : '';
+        $assetUuid = (isset($columnMap['ASSET_UUID']) && $columnMap['ASSET_UUID'] !== false) ? trim($data[$columnMap['ASSET_UUID']] ?? '') : '';
         $assignedUser = isset($columnMap['ASSIGNED_USER']) ? trim($data[$columnMap['ASSIGNED_USER']] ?? '') : '';
+
+        // Normalizeaza tipul la CODE-ul canonic (accepta ID, CODE sau NAME,
+        // ex: '2', 'monitor', 'Monitor' → '2'). Altfel lookup-urile si
+        // custom fields-urile pica pe coduri necunoscute.
+        if ($tipEnum !== '' && isset($canonicalTypes) && !isset($canonicalTypes[$tipEnum])) {
+            $tipKey = mb_strtolower($tipEnum);
+            if (isset($canonicalTypes[$tipKey])) {
+                $tipEnum = $canonicalTypes[$tipKey];
+            } else {
+                $warningDetails[] = "Line <strong>{$lineNum}</strong>: Type '<strong>{$tipEnum}</strong>' not found in dictionary — stored as-is";
+            }
+        }
         
         if (empty($codInventar)) {
             $errors++;
@@ -439,18 +486,31 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['import_file']) && $_F
             $warningDetails[] = "Line <strong>{$lineNum}</strong>: Warranty date could not be converted";
         }
         
+        // Normalizeaza statusul la CODE-ul canonic (accepta ID, CODE sau NAME).
+        $stareEnum = isset($columnMap['STARE_ENUM']) ? trim($data[$columnMap['STARE_ENUM']] ?? StatusTable::IN_STOCK) : StatusTable::IN_STOCK;
+        if ($stareEnum === '') $stareEnum = StatusTable::IN_STOCK;
+        if (isset($canonicalStatuses) && !isset($canonicalStatuses[$stareEnum])) {
+            $stareKey = mb_strtolower($stareEnum);
+            if (isset($canonicalStatuses[$stareKey])) {
+                $stareEnum = $canonicalStatuses[$stareKey];
+            } else {
+                $warningDetails[] = "Line <strong>{$lineNum}</strong>: Status '<strong>{$stareEnum}</strong>' not found in dictionary — stored as-is";
+            }
+        }
+
         $fields = [
             'COD_INVENTAR' => $codInventar,
             'DENUMIRE' => $denumire,
             'TIP_ENUM' => $tipEnum,
             'PRODUCATOR' => isset($columnMap['PRODUCATOR']) ? trim($data[$columnMap['PRODUCATOR']] ?? '') : '',
             'MODEL' => isset($columnMap['MODEL']) ? trim($data[$columnMap['MODEL']] ?? '') : '',
-            'SERIAL_NR' => $modifiedSerial,
+            'SERIAL_NR' => ($modifiedSerial !== '' ? $modifiedSerial : null),
+            'ASSET_UUID' => ($assetUuid !== '' ? $assetUuid : null),
             'DATA_ACHIZITIE' => $dataAchizitie,
             'FURNIZOR' => isset($columnMap['FURNIZOR']) ? trim($data[$columnMap['FURNIZOR']] ?? '') : '',
             'COST_ACHIZITIE' => isset($columnMap['COST_ACHIZITIE']) && !empty($data[$columnMap['COST_ACHIZITIE']]) ? floatval($data[$columnMap['COST_ACHIZITIE']]) : null,
             'DATA_EXPIRARE_GARANTIE' => $dataExpirare,
-            'STARE_ENUM' => isset($columnMap['STARE_ENUM']) ? trim($data[$columnMap['STARE_ENUM']] ?? '2') : '2',
+            'STARE_ENUM' => $stareEnum,
             'LOCATIE' => isset($columnMap['LOCATIE']) ? trim($data[$columnMap['LOCATIE']] ?? '') : '',
             'CONTRACT_SERVICE' => isset($columnMap['CONTRACT_SERVICE']) ? trim($data[$columnMap['CONTRACT_SERVICE']] ?? '') : '',
         ];
@@ -510,7 +570,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['import_file']) && $_F
                     ]);
                     
                     if ($allocResult->isSuccess()) {
-                        EquipmentTable::update($equipmentId, ['STARE_ENUM' => '1']); // 1 = In use
+                        EquipmentTable::update($equipmentId, ['STARE_ENUM' => StatusTable::IN_USE]); // In use
                     } else {
                         $warningDetails[] = "Line <strong>{$lineNum}</strong>: Could not assign user '<strong>{$assignedUser}</strong>'";
                     }
@@ -519,7 +579,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['import_file']) && $_F
                 }
             } elseif ($equipmentId && empty($assignedUser)) {
                 // Dacă nu există responsabil, asigură-te că echipamentul este în stoc
-                EquipmentTable::update($equipmentId, ['STARE_ENUM' => '2']); // 2 = In stock
+                EquipmentTable::update($equipmentId, ['STARE_ENUM' => StatusTable::IN_STOCK]); // In stock
             }
             
         } catch (Exception $e) {
@@ -704,7 +764,7 @@ $totalEquipment = EquipmentTable::getCount();
     <p><strong>ℹ️ Serial number handling:</strong> If a serial number already exists but the inventory code is different, the inventory code will be <strong>appended</strong> to the serial number (e.g., SN12345 → SN12345_PS00006294).</p>
     
     <div class="stats">
-        <strong>📋 Imported fields:</strong> Inventory code, Name, Type, Manufacturer, Model, Serial number, Purchase date, Supplier, Purchase cost, Warranty expiry, Status, Location, Service contract, <strong>Assigned user</strong><br>
+        <strong>📋 Imported fields:</strong> Inventory code, Name, Type, Manufacturer, Model, Serial number, Asset UUID, Purchase date, Supplier, Purchase cost, Warranty expiry, Status, Location, Service contract (E-Factura), <strong>Assigned user</strong><br>
         <small>Fields like ID, Custom fields, Created/Updated by are NOT imported.</small>
     </div>
     
@@ -717,15 +777,16 @@ $totalEquipment = EquipmentTable::getCount();
     
     <div class="import-example">
         <strong>📋 CSV Format Example:</strong>
-ID,Inventory code,Name,Type,Manufacturer,Model,Serial number,Purchase date,Supplier,Purchase cost,Warranty expiry,Status,Location,Service contract,Assigned user
-,PS00006294,Monitor Philips,monitor,Philips,224E,SN12345,2024-01-15,PC Garage,850.00,2027-01-15,2,Office 101,ServiceContract-001,Ion Popescu
-,PS00006295,Dell XPS 15,Workstation,Dell,XPS 15,SN67890,2024-02-20,Dell Store,2500.00,2027-02-20,1,Birou 201,ServiceContract-002,Maria Ionescu
+ID,Inventory code,Name,Type,Manufacturer,Model,Serial number,Asset UUID,Purchase date,Supplier,Purchase cost,Warranty expiry,Status,Location,Service contract,Assigned user
+,PS00006294,Monitor Philips,2,Philips,224E,SN12345,b0c648a6-106e-4374-9404-6aed6e883686,2024-01-15,PC Garage,850.00,2027-01-15,2,Office 101,ServiceContract-001,Ion Popescu
+,PS00006295,Dell XPS 15,1,Dell,XPS 15,SN67890,,2024-02-20,Dell Store,2500.00,2027-02-20,1,Birou 201,ServiceContract-002,Maria Ionescu
 
-<strong>📌 Status codes:</strong>
+<strong>📌 Status codes (numeric = row ID):</strong>
 1 = In use  |  2 = In stock  |  3 = In repair  |  4 = Scrapped  |  5 = Lost
 
-<strong>📌 Type codes:</strong>
-Workstation | monitor | multifunctional | peripheral | accessories
+<strong>📌 Type codes (numeric = row ID):</strong>
+1 = Workstation  |  2 = Monitor  |  3 = Printer &amp; Scanner  |  4 = Peripherals  |  5 = Cables &amp; Accessories
+(see Types &amp; Statuses page for the full list)
 
 <strong>👤 Assigned user:</strong> Can be full name (Ion Popescu) or login (ion.popescu)
     </div>

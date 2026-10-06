@@ -14,6 +14,14 @@ if ($APPLICATION->GetGroupRight("bitrix.inventar") < "W") {
 
 // Save custom fields
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['save_fields'])) {
+    // Garda anti-wipe: daca POST-ul nu contine deloc 'fields' (formular gol /
+    // request trunchiat), NU stergem campurile existente.
+    if (!isset($_POST['fields']) || !is_array($_POST['fields'])) {
+        CAdminMessage::ShowMessage([
+            'MESSAGE' => 'Nothing to save: no field data received. Existing custom fields kept.',
+            'TYPE' => 'ERROR',
+        ]);
+    } else {
     // Delete all existing fields
     $existing = CustomFieldsTable::getList()->fetchAll();
     foreach ($existing as $item) {
@@ -43,6 +51,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['save_fields'])) {
     }
     CAdminMessage::ShowMessage("Custom fields saved successfully!", "OK");
     LocalRedirect($APPLICATION->GetCurPage());
+    }
 }
 
 // Get all types

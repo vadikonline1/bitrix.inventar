@@ -10,16 +10,17 @@ CREATE TABLE IF NOT EXISTS b_bitrix_inventar_equipment (
     PRODUCATOR VARCHAR(100),
     MODEL VARCHAR(100),
     SERIAL_NR VARCHAR(100),
+    ASSET_UUID VARCHAR(100) NULL COMMENT 'External asset UUID (used for external API sync)',
     DATA_ACHIZITIE DATE,
     FURNIZOR VARCHAR(255),
     COST_ACHIZITIE DECIMAL(10,2),
     DATA_EXPIRARE_GARANTIE DATE,
-    STARE_ENUM VARCHAR(50) NOT NULL DEFAULT 'in_stock',
+    STARE_ENUM VARCHAR(50) NOT NULL DEFAULT '2',
     LOCATIE VARCHAR(255),
-    CONTRACT_SERVICE VARCHAR(255),
+    CONTRACT_SERVICE VARCHAR(255) COMMENT 'E-Factura / service contract reference',
     OTHERS_INFO TEXT,
-    BARCODE_TEXT VARCHAR(255),
-    QR_CODE_TEXT TEXT,
+    EXTERNAL_API MEDIUMTEXT NULL COMMENT 'Raw JSON synced from external asset API',
+    EXTERNAL_SYNC_AT DATETIME NULL COMMENT 'Last successful external API sync',
     NOTIFICATION_SENT VARCHAR(1) DEFAULT 'N',
     CREATED_BY INT(11),
     CREATED_AT TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -28,6 +29,7 @@ CREATE TABLE IF NOT EXISTS b_bitrix_inventar_equipment (
     PRIMARY KEY (ID),
     UNIQUE KEY uk_cod_inventar (COD_INVENTAR),
     UNIQUE KEY uk_serial (SERIAL_NR),
+    UNIQUE KEY uk_asset_uuid (ASSET_UUID),
     INDEX idx_tip (TIP_ENUM),
     INDEX idx_stare (STARE_ENUM),
     INDEX idx_created (CREATED_AT)
@@ -109,11 +111,14 @@ CREATE TABLE IF NOT EXISTS b_bitrix_inventar_types (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 INSERT IGNORE INTO b_bitrix_inventar_types (CODE, NAME, SORT) VALUES
-('Workstation', 'Workstation', 10),
-('monitor', 'Monitor', 20),
-('multifunctional', 'Printer & Scanner', 30),
-('peripheral', 'Peripherals', 40),
-('accessories', 'Cables & Accessories', 50);
+('1', 'Workstation', 10),
+('2', 'Monitor', 20),
+('3', 'Printer & Scanner', 30),
+('4', 'Peripherals', 40),
+('5', 'Cables & Accessories', 50);
+
+-- CODE = ID numeric (garanteaza corespondenta chiar daca AUTO_INCREMENT nu porneste de la 1)
+UPDATE b_bitrix_inventar_types SET CODE = ID;
 
 -- =====================================================
 -- Table: b_bitrix_inventar_status
@@ -130,11 +135,14 @@ CREATE TABLE IF NOT EXISTS b_bitrix_inventar_status (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 INSERT IGNORE INTO b_bitrix_inventar_status (CODE, NAME, SORT, COLOR) VALUES
-('in_use', 'In use', 10, '#4CAF50'),
-('in_stock', 'In stock', 20, '#9E9E9E'),
-('repair', 'In repair', 30, '#FF9800'),
-('scrapped', 'Scrapped', 40, '#f44336'),
-('lost', 'Lost', 50, '#5D4037');
+('1', 'In use', 10, '#4CAF50'),
+('2', 'In stock', 20, '#9E9E9E'),
+('3', 'In repair', 30, '#FF9800'),
+('4', 'Scrapped', 40, '#f44336'),
+('5', 'Lost', 50, '#5D4037');
+
+-- CODE = ID numeric (1=In use, 2=In stock, 3=In repair, 4=Scrapped, 5=Lost)
+UPDATE b_bitrix_inventar_status SET CODE = ID;
 
 -- =====================================================
 -- Table: b_bitrix_inventar_custom_fields

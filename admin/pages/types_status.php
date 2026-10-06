@@ -3,8 +3,10 @@ use Bitrix\Main\Loader;
 use Bitrix\Main\Config\Option;
 use Bitrix\Inventar\TypesTable;
 use Bitrix\Inventar\StatusTable;
+use Bitrix\Inventar\CustomFieldsTable;
 
 Loader::includeModule('bitrix.inventar');
+
 
 $APPLICATION->SetTitle("Types and Statuses Management");
 require($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admin_after.php");
@@ -13,55 +15,227 @@ if ($APPLICATION->GetGroupRight("bitrix.inventar") < "W") {
     $APPLICATION->AuthForm("Access denied");
 }
 
-// Salvare tipuri - CODE-ul este generat automat
+// Salvare tipuri — CODE = ID numeric.
+// Update in place dupa ID (ID-urile nu se schimba niciodata); randurile noi
+// primesc CODE = ID-ul generat. Echipamentele (TIP_ENUM) SI campurile custom
+// (TYPE_CODE) care referentiau vechiul CODE sunt migrate automat pe noul CODE,
+// deci Custom Fields by Type nu se mai "reseteaza".
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['save_types'])) {
-    // Șterge toate tipurile existente
     $existing = TypesTable::getList()->fetchAll();
-    foreach ($existing as $item) {
-        TypesTable::delete($item['ID']);
+    $byId = [];
+    foreach ($existing as $e) $byId[(int)$e['ID']] = $e;
+
+    $ids = $_POST['type_id'] ?? [];
+    $names = $_POST['type_name'] ?? [];
+
+    // Garda anti-wipe: submit complet gol nu sterge tipurile existente.
+    $hasValid = false;
+    foreach ($names as $n) {
+        if (trim((string)$n) !== '') { $hasValid = true; break; }
     }
-    
-    // Adaugă noile tipuri cu CODE generat automat
-    for ($i = 0; $i < count($_POST['type_name'] ?? []); $i++) {
-        $typeName = trim($_POST['type_name'][$i] ?? '');
-        if (!empty($typeName)) {
-            // Generăm CODE-ul automat ca număr (1, 2, 3, ...)
-            $autoCode = ($i + 1);
-            
-            TypesTable::add([
-                'CODE' => $autoCode,  // Cod generat automat
-                'NAME' => $typeName,
-                'SORT' => ($i + 1) * 10
-            ]);
+    if (!$hasValid && !empty($byId)) {
+        CAdminMessage::ShowMessage([
+            'MESSAGE' => 'Nothing to save: all type names are empty. Existing types and custom fields kept.',
+            'TYPE' => 'ERROR',
+        ]);
+    } else {
+        $seenIds = [];
+        $sort = 10;
+
+        $connection = \Bitrix\Main\Application::getConnection();
+        $sqlHelper = $connection->getSqlHelper();
+        $eqTable = \Bitrix\Inventar\EquipmentTable::getTableName();
+        $cfTable = CustomFieldsTable::getTableName();
+
+        for ($i = 0; $i < count($names); $i++) {
+            $typeName = trim((string)($names[$i] ?? ''));
+            if ($typeName === '') continue;
+            $id = (int)($ids[$i] ?? 0);
+            if ($id > 0 && isset($byId[$id])) {
+                $oldCode = (string)$byId[$id]['CODE'];
+                $newCode = (string)$id;
+                TypesTable::update($id, ['CODE' => $newCode, 'NAME' => $typeName, 'SORT' => $sort]);
+                if ($oldCode !== '' && $oldCode !== $newCode) {
+                    try {
+                        $connection->queryExecute(
+                            "UPDATE `{$eqTable}` SET TIP_ENUM = '" . $sqlHelper->forSql($newCode) .
+                            "' WHERE TIP_ENUM = '" . $sqlHelper->forSql($oldCode) . "'"
+                        );
+                    } catch (\Exception $e) {}
+                    try {
+                        $connection->queryExecute(
+                            "UPDATE `{$cfTable}` SET TYPE_CODE = '" . $sqlHelper->forSql($newCode) .
+                            "' WHERE TYPE_CODE = '" . $sqlHelper->forSql($oldCode) . "'"
+                        );
+                    } catch (\Exception $e) {}
+                }
+                $seenIds[$id] = true;
+            } else {
+                $tmpCode = 'tmp_' . uniqid();
+                $res = TypesTable::add(['CODE' => $tmpCode, 'NAME' => $typeName, 'SORT' => $sort]);
+                if ($res->isSuccess()) {
+                    $newId = (int)$res->getId();
+                    TypesTable::update($newId, ['CODE' => (string)$newId]);
+                    $seenIds[$newId] = true;
+                }
+            }
+            $sort += 10;
         }
+
+        foreach ($byId as $id => $e) {
+            if (!isset($seenIds[$id])) {
+                try { TypesTable::delete($id); } catch (\Exception $ex) {}
+            }
+        }
+
+        // Heal orfani pre-existenti: custom fields si echipamente al caror cod
+        // nu mai exista, dar coincide cu NAME-ul unui tip → remap pe CODE canonic.
+        $healedMsg = healOrphanCodes('type');
+
+        CAdminMessage::ShowMessage("Types saved successfully!" . $healedMsg, "OK");
     }
-    CAdminMessage::ShowMessage("Types saved successfully!", "OK");
 }
 
-// Salvare stări - CODE-ul este generat automat
+// Salvare stari — CODE = ID numeric (1=In use, 2=In stock, 3=In repair...).
+// Acelasi mecanism ca la tipuri, cu migrare STARE_ENUM.
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['save_status'])) {
-    // Șterge toate stările existente
     $existing = StatusTable::getList()->fetchAll();
-    foreach ($existing as $item) {
-        StatusTable::delete($item['ID']);
+    $byId = [];
+    foreach ($existing as $e) $byId[(int)$e['ID']] = $e;
+
+    $ids = $_POST['status_id'] ?? [];
+    $names = $_POST['status_name'] ?? [];
+    $colors = $_POST['status_color'] ?? [];
+
+    // Garda anti-wipe: submit complet gol nu sterge starile existente.
+    $hasValid = false;
+    foreach ($names as $n) {
+        if (trim((string)$n) !== '') { $hasValid = true; break; }
     }
-    
-    // Adaugă noile stări cu CODE generat automat
-    for ($i = 0; $i < count($_POST['status_name'] ?? []); $i++) {
-        $statusName = trim($_POST['status_name'][$i] ?? '');
-        if (!empty($statusName)) {
-            // Generăm CODE-ul automat ca număr (1, 2, 3, ...)
-            $autoCode = ($i + 1);
-            
-            StatusTable::add([
-                'CODE' => $autoCode,  // Cod generat automat
-                'NAME' => $statusName,
-                'COLOR' => $_POST['status_color'][$i] ?? '#666666',
-                'SORT' => ($i + 1) * 10
-            ]);
+    if (!$hasValid && !empty($byId)) {
+        CAdminMessage::ShowMessage([
+            'MESSAGE' => 'Nothing to save: all status names are empty. Existing statuses kept.',
+            'TYPE' => 'ERROR',
+        ]);
+    } else {
+        $seenIds = [];
+        $sort = 10;
+
+        $connection = \Bitrix\Main\Application::getConnection();
+        $sqlHelper = $connection->getSqlHelper();
+        $eqTable = \Bitrix\Inventar\EquipmentTable::getTableName();
+
+        for ($i = 0; $i < count($names); $i++) {
+            $statusName = trim((string)($names[$i] ?? ''));
+            if ($statusName === '') continue;
+            $id = (int)($ids[$i] ?? 0);
+            $color = $colors[$i] ?? '#666666';
+            if ($id > 0 && isset($byId[$id])) {
+                $oldCode = (string)$byId[$id]['CODE'];
+                $newCode = (string)$id;
+                StatusTable::update($id, ['CODE' => $newCode, 'NAME' => $statusName, 'COLOR' => $color, 'SORT' => $sort]);
+                if ($oldCode !== '' && $oldCode !== $newCode) {
+                    try {
+                        $connection->queryExecute(
+                            "UPDATE `{$eqTable}` SET STARE_ENUM = '" . $sqlHelper->forSql($newCode) .
+                            "' WHERE STARE_ENUM = '" . $sqlHelper->forSql($oldCode) . "'"
+                        );
+                    } catch (\Exception $e) {}
+                }
+                $seenIds[$id] = true;
+            } else {
+                $tmpCode = 'tmp_' . uniqid();
+                $res = StatusTable::add(['CODE' => $tmpCode, 'NAME' => $statusName, 'COLOR' => $color, 'SORT' => $sort]);
+                if ($res->isSuccess()) {
+                    $newId = (int)$res->getId();
+                    StatusTable::update($newId, ['CODE' => (string)$newId]);
+                    $seenIds[$newId] = true;
+                }
+            }
+            $sort += 10;
         }
+
+        foreach ($byId as $id => $e) {
+            if (!isset($seenIds[$id])) {
+                try { StatusTable::delete($id); } catch (\Exception $ex) {}
+            }
+        }
+
+        // Heal orfani pre-existenti (stari).
+        $healedMsg = healOrphanCodes('status');
+
+        CAdminMessage::ShowMessage("Statuses saved successfully!" . $healedMsg, "OK");
     }
-    CAdminMessage::ShowMessage("Statuses saved successfully!", "OK");
+}
+
+/**
+ * Heal orfani: inregistrari (echipamente TIP_ENUM/STARE_ENUM, custom fields TYPE_CODE)
+ * al caror cod nu mai exista in dictionar, dar coincide cu NAME-ul unei intrari
+ * (comparatie insensibila, '_'/'-' tratate ca spatii) → remap pe CODE-ul canonic.
+ * Intoarce textul de raport ('' daca nu s-a remapat nimic).
+ */
+function healOrphanCodes($kind)
+{
+    $healedCf = 0;
+    $healedEq = 0;
+    try {
+        if ($kind === 'type') {
+            $rows = \Bitrix\Inventar\TypesTable::getList()->fetchAll();
+            $eqColumn = 'TIP_ENUM';
+        } else {
+            $rows = \Bitrix\Inventar\StatusTable::getList()->fetchAll();
+            $eqColumn = 'STARE_ENUM';
+        }
+
+        $validCodes = [];
+        $normNameToCode = [];
+        foreach ($rows as $r) {
+            $validCodes[(string)$r['CODE']] = true;
+            $normNameToCode[mb_strtolower(trim(str_replace(['_', '-'], ' ', (string)$r['NAME'])))] = (string)$r['CODE'];
+        }
+        if (empty($normNameToCode)) return '';
+
+        $norm = function ($v) {
+            return mb_strtolower(trim(str_replace(['_', '-'], ' ', (string)$v)));
+        };
+
+        // 1. Custom fields (doar pentru tipuri).
+        if ($kind === 'type') {
+            $allCf = \Bitrix\Inventar\CustomFieldsTable::getList(['select' => ['ID', 'TYPE_CODE']])->fetchAll();
+            foreach ($allCf as $cf) {
+                $tc = (string)($cf['TYPE_CODE'] ?? '');
+                if ($tc === '' || isset($validCodes[$tc])) continue;
+                $k = $norm($tc);
+                if (isset($normNameToCode[$k])) {
+                    try {
+                        \Bitrix\Inventar\CustomFieldsTable::update($cf['ID'], ['TYPE_CODE' => $normNameToCode[$k]]);
+                        $healedCf++;
+                    } catch (\Exception $e) {}
+                }
+            }
+        }
+
+        // 2. Echipamente.
+        $allEq = \Bitrix\Inventar\EquipmentTable::getList(['select' => ['ID', $eqColumn]])->fetchAll();
+        foreach ($allEq as $eq) {
+            $v = (string)($eq[$eqColumn] ?? '');
+            if ($v === '' || isset($validCodes[$v])) continue;
+            $k = $norm($v);
+            if (isset($normNameToCode[$k])) {
+                try {
+                    \Bitrix\Inventar\EquipmentTable::update($eq['ID'], [$eqColumn => $normNameToCode[$k]]);
+                    $healedEq++;
+                } catch (\Exception $e) {}
+            }
+        }
+    } catch (\Exception $e) {
+        return '';
+    }
+
+    $msg = '';
+    if ($healedCf > 0) $msg .= " Custom fields remapped: <strong>{$healedCf}</strong>.";
+    if ($healedEq > 0) $msg .= " Equipment remapped: <strong>{$healedEq}</strong>.";
+    return $msg;
 }
 
 // Salvare grup utilizatori
@@ -83,13 +257,105 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['save_notification_sett
 }
 
 // Obține setările curente
-$notificationNewEquipment = Option::get('bitrix.inventar', 'notification_new_equipment', 'Y');
-$notificationAssignment = Option::get('bitrix.inventar', 'notification_assignment', 'Y');
+$notificationNewEquipment = Option::get('bitrix.inventar', 'notification_new_equipment', 'N');
+$notificationAssignment = Option::get('bitrix.inventar', 'notification_assignment', 'N');
 
 // Obține datele curente
 $tipuri = TypesTable::getList(['order' => ['SORT' => 'ASC']])->fetchAll();
 $stari = StatusTable::getList(['order' => ['SORT' => 'ASC']])->fetchAll();
 $responsibleGroupId = Option::get('bitrix.inventar', 'responsible_group_id', 0);
+
+// ========== SALVARE SETĂRI EXTERNAL API ==========
+if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['save_external_api'])) {
+    Option::set('bitrix.inventar', 'external_api_url', trim($_POST['external_api_url'] ?? ''));
+    $extField = strtoupper(trim($_POST['external_api_field'] ?? 'ASSET_UUID'));
+    if (!in_array($extField, ['ASSET_UUID', 'COD_INVENTAR', 'SERIAL_NR'], true)) $extField = 'ASSET_UUID';
+    Option::set('bitrix.inventar', 'external_api_field', $extField);
+    Option::set('bitrix.inventar', 'external_api_token', trim($_POST['external_api_token'] ?? ''));
+    Option::set('bitrix.inventar', 'external_ssl_skip', ($_POST['external_ssl_skip'] ?? 'N') === 'Y' ? 'Y' : 'N');
+    Option::set('bitrix.inventar', 'external_sync_days', (string)max(1, (int)($_POST['external_sync_days'] ?? 7)));
+    Option::set('bitrix.inventar', 'external_sync_enabled', ($_POST['external_sync_enabled'] ?? 'N') === 'Y' ? 'Y' : 'N');
+
+    $agentMsg = \Bitrix\Inventar\ExternalSync::refreshAgent();
+    CAdminMessage::ShowMessage("External API settings saved successfully! " . htmlspecialchars($agentMsg), "OK");
+    LocalRedirect($APPLICATION->GetCurPage());
+}
+
+// ========== TEST EXTERNAL CONNECTION (nu salveaza nimic) ==========
+if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['test_external_api'])) {
+    $tUrl = trim($_POST['external_api_url'] ?? '');
+    if ($tUrl === '') $tUrl = \Bitrix\Inventar\ExternalSync::getConfig()['url'];
+    $tToken = trim($_POST['external_api_token'] ?? '');
+    if ($tToken === '' && !isset($_POST['external_api_token'])) {
+        $tToken = \Bitrix\Inventar\ExternalSync::getConfig()['token'];
+    }
+    $tSkip = ($_POST['external_ssl_skip'] ?? 'N') === 'Y';
+    $tKey = trim($_POST['test_asset_uuid'] ?? '');
+    if ($tKey === '') {
+        // fallback: primul echipament cu cheie completata
+        try {
+            $cfg0 = \Bitrix\Inventar\ExternalSync::getConfig();
+            $kf = in_array($cfg0['field'], ['ASSET_UUID', 'COD_INVENTAR', 'SERIAL_NR'], true) ? $cfg0['field'] : 'ASSET_UUID';
+            $first = \Bitrix\Inventar\EquipmentTable::getList([
+                'filter' => ['!=' . $kf => ''],
+                'select' => [$kf],
+                'order' => ['ID' => 'ASC'],
+                'limit' => 1,
+            ])->fetch();
+            if ($first) $tKey = trim((string)$first[$kf]);
+        } catch (\Exception $e) {}
+    }
+    try {
+        $tRes = \Bitrix\Inventar\ExternalSync::testConnection($tUrl, $tKey, $tToken, $tSkip);
+    } catch (\Exception $e) {
+        $tRes = ['ok' => false, 'http' => 0, 'error' => $e->getMessage(), 'url' => ''];
+    }
+    if ($tRes['ok']) {
+        CAdminMessage::ShowNote(
+            "Connection OK: HTTP <strong>{$tRes['http']}</strong>, received <strong>{$tRes['bytes']}</strong> bytes.<br>" .
+            "<code>" . htmlspecialchars($tRes['url']) . "</code>"
+        );
+    } else {
+        CAdminMessage::ShowMessage([
+            'MESSAGE' => "Connection FAILED" . ($tRes['http'] ? " (HTTP {$tRes['http']})" : "") . ": " .
+                htmlspecialchars($tRes['error']) . "<br><code>" . htmlspecialchars($tRes['url']) . "</code>",
+            'TYPE' => 'ERROR',
+            'HTML' => true,
+        ]);
+    }
+}
+
+// ========== SYNC NOW (toate echipamentele cu cheie) ==========
+if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['sync_external_all'])) {
+    try {
+        $syncRes = \Bitrix\Inventar\ExternalSync::syncAll(true);
+    } catch (\Exception $e) {
+        $syncRes = ['ok' => false, 'error' => $e->getMessage()];
+    }
+    if ($syncRes['ok']) {
+        $msg = "Sync completed: <strong>{$syncRes['synced']}</strong> synced, "
+            . "<strong>{$syncRes['skipped']}</strong> skipped, "
+            . "<strong>{$syncRes['errors']}</strong> errors (of {$syncRes['total']} with key).";
+        if (!empty($syncRes['error_samples'])) {
+            $msg .= "<br>" . implode("<br>", array_map('htmlspecialchars', $syncRes['error_samples']));
+        }
+        CAdminMessage::ShowNote($msg);
+    } else {
+        CAdminMessage::ShowMessage(['MESSAGE' => "Sync failed: " . htmlspecialchars($syncRes['error']), 'TYPE' => 'ERROR', 'HTML' => true]);
+    }
+}
+
+$extCfg = \Bitrix\Inventar\ExternalSync::getConfig();
+$extWithKey = 0;
+$extSynced = 0;
+try {
+    $extFieldCheck = in_array($extCfg['field'], ['ASSET_UUID', 'COD_INVENTAR', 'SERIAL_NR'], true) ? $extCfg['field'] : 'ASSET_UUID';
+    $extWithKey = \Bitrix\Inventar\EquipmentTable::getCount(['!=' . $extFieldCheck => '']);
+    $allExt = \Bitrix\Inventar\EquipmentTable::getList(['filter' => ['!=' . $extFieldCheck => ''], 'select' => ['EXTERNAL_API']])->fetchAll();
+    foreach ($allExt as $row) {
+        if (!empty($row['EXTERNAL_API'])) $extSynced++;
+    }
+} catch (\Exception $e) {}
 
 // Preia toate grupurile
 $arGroups = [];
@@ -221,31 +487,138 @@ if ($responsibleGroupId > 0) {
     <?php endif; ?>
 </div>
 
-<!-- ========== SECȚIUNEA 3: TIPURI ECHIPAMENTE (cu COD automat) ========== -->
+<!-- ========== SECȚIUNEA 3b: EXTERNAL API (Active) ========== -->
+<div class="section-box">
+    <div class="section-title">🌐 External API (Active) — sync asset data</div>
+    <div class="info-box">
+        <strong>ℹ️ How it works:</strong> for each equipment having the key field filled,
+        the module calls <code>{Base URL}/{key}</code>,
+        e.g. <code>http://10.130.10.232:8081/api/v1/assets/b0c648a6-106e-4374-9404-6aed6e883686</code>.
+        The raw response is stored in <code>EXTERNAL_API</code> and shown on the equipment details page
+        (<code>/inventar/?id=...</code>).
+        Current status: <strong><?= $extWithKey ?></strong> equipment with key (<?= htmlspecialchars($extCfg['field']) ?>),
+        <strong><?= $extSynced ?></strong> already synced.
+    </div>
+    <form method="POST" id="extApiForm">
+        <div class="notification-option">
+            <label>Base URL:</label>
+            <input type="text" name="external_api_url" value="<?= htmlspecialchars($extCfg['url']) ?>" style="width: 480px; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" placeholder="http://10.130.10.232:8081/api/v1/assets/">
+            <div class="notification-desc">Full item URL = Base URL + key value. Keep the trailing slash.</div>
+        </div>
+
+        <div class="notification-option">
+            <label>Key field (local):</label>
+            <select name="external_api_field">
+                <option value="ASSET_UUID" <?= $extCfg['field'] === 'ASSET_UUID' ? 'selected' : '' ?>>Asset UUID (ASSET_UUID)</option>
+                <option value="COD_INVENTAR" <?= $extCfg['field'] === 'COD_INVENTAR' ? 'selected' : '' ?>>Inventory code (COD_INVENTAR)</option>
+                <option value="SERIAL_NR" <?= $extCfg['field'] === 'SERIAL_NR' ? 'selected' : '' ?>>Serial number (SERIAL_NR)</option>
+            </select>
+            <div class="notification-desc">Which equipment field is appended to the Base URL.</div>
+        </div>
+
+        <div class="notification-option">
+            <label>Token (optional):</label>
+            <input type="text" name="external_api_token" value="<?= htmlspecialchars($extCfg['token']) ?>" style="width: 400px; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" placeholder="Bearer token, if the API requires auth" autocomplete="off">
+            <div class="notification-desc">Sent as <code>Authorization: Bearer &lt;token&gt;</code>. Leave empty for open APIs.</div>
+        </div>
+
+        <div class="notification-option">
+            <label>Skip SSL verification:</label>
+            <select name="external_ssl_skip">
+                <option value="Y" <?= !empty($extCfg['ssl_skip']) ? 'selected' : '' ?>>Yes — intranet with self-signed certificate</option>
+                <option value="N" <?= empty($extCfg['ssl_skip']) ? 'selected' : '' ?>>No — verify certificate (default)</option>
+            </select>
+            <div class="notification-desc">Enable only if sync fails with SSL/certificate errors on an internal HTTPS host (e.g. <code>https://assets.intranet...</code>).</div>
+        </div>
+
+        <div class="notification-option">
+            <label>Auto re-sync every (days):</label>
+            <input type="number" name="external_sync_days" value="<?= (int)$extCfg['days'] ?>" min="1" max="365" style="width: 90px; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+            <div class="notification-desc">Items synced more recently than this are skipped by the automatic sync.</div>
+        </div>
+
+        <div class="notification-option">
+            <label>Auto sync (Bitrix agent / cron):</label>
+            <select name="external_sync_enabled">
+                <option value="Y" <?= $extCfg['enabled'] ? 'selected' : '' ?>>Yes — run automatically every X days</option>
+                <option value="N" <?= !$extCfg['enabled'] ? 'selected' : '' ?>>No — manual sync only</option>
+            </select>
+            <div class="notification-desc">Uses the Bitrix agents system (needs agents/cron active on the server). Saving re-creates the agent.</div>
+        </div>
+
+        <input type="submit" name="save_external_api" value="💾 Save external API settings" class="adm-btn-save">
+    </form>
+
+    <form method="POST" id="extApiTestForm" style="margin-top:15px; padding-top:15px; border-top:1px solid #eee;">
+        <div class="notification-option" style="background:#e8f0fe;">
+            <label>🔌 Test connection (saves nothing):</label>
+            <div class="notification-desc" style="margin-left:0;">
+                Tries one GET with the URL/token/SSL settings currently typed above and shows HTTP status or error.
+                Uses the UUID below, or the first equipment having the key field filled.
+            </div>
+            <div style="margin-top:8px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                <input type="text" name="test_asset_uuid" value="" style="width: 340px; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" placeholder="UUID to test (optional)">
+                <button type="submit" name="test_external_api" class="adm-btn" style="background:#607D8B;">🔌 Test connection</button>
+            </div>
+            <input type="hidden" name="external_api_url" value="<?= htmlspecialchars($extCfg['url']) ?>">
+            <input type="hidden" name="external_api_token" value="<?= htmlspecialchars($extCfg['token']) ?>">
+            <input type="hidden" name="external_ssl_skip" value="<?= !empty($extCfg['ssl_skip']) ? 'Y' : 'N' ?>">
+        </div>
+    </form>
+    <script>
+    // Testul foloseste valorile tastate in formularul de mai sus (nu doar cele salvate).
+    (function () {
+        var testForm = document.getElementById('extApiTestForm');
+        if (!testForm) return;
+        testForm.addEventListener('submit', function () {
+            var src = document.getElementById('extApiForm');
+            if (!src) return;
+            ['external_api_url', 'external_api_token', 'external_ssl_skip'].forEach(function (n) {
+                var s = src.querySelector('[name="' + n + '"]');
+                var d = testForm.querySelector('input[name="' + n + '"]');
+                if (s && d) d.value = s.value;
+            });
+        });
+    })();
+    </script>
+
+    <form method="POST" style="margin-top:15px; padding-top:15px; border-top:1px solid #eee;" onsubmit="return confirm('Sync ALL equipment having the key field filled? This may take a while.');">
+        <div class="notification-option" style="background:#e8f5e9;">
+            <label>🔄 Manual sync now:</label>
+            <div class="notification-desc" style="margin-left:0;">
+                Re-syncs all <strong><?= $extWithKey ?></strong> equipment having <strong><?= htmlspecialchars($extCfg['field']) ?></strong> filled.
+                Single-item sync is also available on each equipment edit page.
+                For fully automatic sync, enable "Auto sync" above (Bitrix agent, every X days).
+            </div>
+            <button type="submit" name="sync_external_all" class="adm-btn" style="background:#4CAF50; margin-top:10px;">🔄 Sync now (all with key)</button>
+        </div>
+    </form>
+</div>
+
+<!-- ========== SECȚIUNEA 4: TIPURI ECHIPAMENTE (cu COD automat) ========== -->
 <div class="section-box">
     <div class="section-title">📋 Equipment Types</div>
     <div class="info-box">
-        <strong>ℹ️ Info:</strong> The <strong>Code</strong> is automatically generated (1, 2, 3, ...) based on the order.
-        You only need to enter the <strong>Display name</strong>.
+        <strong>ℹ️ Info:</strong> The <strong>Code is the numeric row ID</strong> and never changes.
+        Renaming a type keeps all equipment linked. New rows get the next ID on save.
     </div>
     <form method="POST">
         <table class="data-table" id="types-table">
             <thead>
                 <tr>
-                    <th style="width: 120px;">Code (auto)</th>
+                    <th style="width: 120px;">Code (= ID)</th>
                     <th>Display name *</th>
                     <th style="width: 100px;">Actions</th>
                 </tr>
             </thead>
             <tbody id="types-body">
-                <?php 
-                $typeIndex = 1;
-                foreach ($tipuri as $tip): 
+                <?php
+                foreach ($tipuri as $tip):
                 ?>
                 <tr>
                     <td>
-                        <span class="code-auto">#<?= $typeIndex ?></span>
-                        <input type="hidden" name="type_code[]" value="<?= $typeIndex ?>">
+                        <span class="code-auto"><?= (int)$tip['ID'] ?></span>
+                        <input type="hidden" name="type_id[]" value="<?= (int)$tip['ID'] ?>">
                     </td>
                     <td>
                         <input type="text" name="type_name[]" value="<?= htmlspecialchars($tip['NAME']) ?>" style="width:100%" placeholder="Enter type name...">
@@ -254,9 +627,8 @@ if ($responsibleGroupId > 0) {
                         <button type="button" class="btn-remove" onclick="removeTypeRow(this)">Delete</button>
                     </td>
                 </tr>
-                <?php 
-                $typeIndex++;
-                endforeach; 
+                <?php
+                endforeach;
                 ?>
             </tbody>
         </table>
@@ -269,28 +641,27 @@ if ($responsibleGroupId > 0) {
 <div class="section-box">
     <div class="section-title">📊 Equipment Statuses</div>
     <div class="info-box">
-        <strong>ℹ️ Info:</strong> The <strong>Code</strong> is automatically generated (1, 2, 3, ...) based on the order.
-        You only need to enter the <strong>Display name</strong> and choose a <strong>Color</strong>.
+        <strong>ℹ️ Info:</strong> The <strong>Code is the numeric row ID</strong> and never changes.
+        Renaming a status keeps all equipment linked. New rows get the next ID on save.
     </div>
     <form method="POST">
         <table class="data-table" id="status-table">
             <thead>
                 <tr>
-                    <th style="width: 120px;">Code (auto)</th>
+                    <th style="width: 120px;">Code (= ID)</th>
                     <th>Display name *</th>
                     <th style="width: 100px;">Color</th>
                     <th style="width: 100px;">Actions</th>
                 </tr>
             </thead>
             <tbody id="status-body">
-                <?php 
-                $statusIndex = 1;
-                foreach ($stari as $stare): 
+                <?php
+                foreach ($stari as $stare):
                 ?>
                 <tr>
                     <td>
-                        <span class="code-auto">#<?= $statusIndex ?></span>
-                        <input type="hidden" name="status_code[]" value="<?= $statusIndex ?>">
+                        <span class="code-auto"><?= (int)$stare['ID'] ?></span>
+                        <input type="hidden" name="status_id[]" value="<?= (int)$stare['ID'] ?>">
                     </td>
                     <td>
                         <input type="text" name="status_name[]" value="<?= htmlspecialchars($stare['NAME']) ?>" style="width:100%" placeholder="Enter status name...">
@@ -303,9 +674,8 @@ if ($responsibleGroupId > 0) {
                         <button type="button" class="btn-remove" onclick="removeStatusRow(this)">Delete</button>
                     </td>
                 </tr>
-                <?php 
-                $statusIndex++;
-                endforeach; 
+                <?php
+                endforeach;
                 ?>
             </tbody>
         </table>
@@ -318,14 +688,12 @@ if ($responsibleGroupId > 0) {
 // ========== FUNCȚII PENTRU TIPURI ==========
 function addTypeRow() {
     const tbody = document.getElementById('types-body');
-    const rows = tbody.querySelectorAll('tr');
-    const nextIndex = rows.length + 1;
-    
+
     const row = document.createElement('tr');
     row.innerHTML = `
         <td>
-            <span class="code-auto">#${nextIndex}</span>
-            <input type="hidden" name="type_code[]" value="${nextIndex}">
+            <span class="code-auto" style="color:#999;">(new)</span>
+            <input type="hidden" name="type_id[]" value="">
         </td>
         <td>
             <input type="text" name="type_name[]" style="width:100%" placeholder="Enter type name...">
@@ -341,36 +709,22 @@ function removeTypeRow(button) {
     if (confirm('Are you sure you want to delete this type?')) {
         const row = button.closest('tr');
         row.remove();
-        recalculateTypeIndexes();
     }
 }
 
 function recalculateTypeIndexes() {
-    const rows = document.querySelectorAll('#types-body tr');
-    rows.forEach(function(row, index) {
-        const newIndex = index + 1;
-        const codeSpan = row.querySelector('.code-auto');
-        const hiddenInput = row.querySelector('input[name="type_code[]"]');
-        if (codeSpan) {
-            codeSpan.textContent = '#' + newIndex;
-        }
-        if (hiddenInput) {
-            hiddenInput.value = newIndex;
-        }
-    });
+    // Codurile sunt stabile — nu mai renumerotam. Functie pastrata pentru compatibilitate.
 }
 
 // ========== FUNCȚII PENTRU STĂRI ==========
 function addStatusRow() {
     const tbody = document.getElementById('status-body');
-    const rows = tbody.querySelectorAll('tr');
-    const nextIndex = rows.length + 1;
-    
+
     const row = document.createElement('tr');
     row.innerHTML = `
         <td>
-            <span class="code-auto">#${nextIndex}</span>
-            <input type="hidden" name="status_code[]" value="${nextIndex}">
+            <span class="code-auto" style="color:#999;">(new)</span>
+            <input type="hidden" name="status_id[]" value="">
         </td>
         <td>
             <input type="text" name="status_name[]" style="width:100%" placeholder="Enter status name...">
@@ -397,23 +751,11 @@ function removeStatusRow(button) {
     if (confirm('Are you sure you want to delete this status?')) {
         const row = button.closest('tr');
         row.remove();
-        recalculateStatusIndexes();
     }
 }
 
 function recalculateStatusIndexes() {
-    const rows = document.querySelectorAll('#status-body tr');
-    rows.forEach(function(row, index) {
-        const newIndex = index + 1;
-        const codeSpan = row.querySelector('.code-auto');
-        const hiddenInput = row.querySelector('input[name="status_code[]"]');
-        if (codeSpan) {
-            codeSpan.textContent = '#' + newIndex;
-        }
-        if (hiddenInput) {
-            hiddenInput.value = newIndex;
-        }
-    });
+    // Codurile sunt stabile — nu mai renumerotam. Functie pastrata pentru compatibilitate.
 }
 
 // ========== INITIALIZARE ==========

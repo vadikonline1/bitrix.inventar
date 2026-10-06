@@ -34,6 +34,9 @@ class EquipmentTable extends Entity\DataManager
             new Entity\StringField('MODEL'),
             new Entity\StringField('SERIAL_NR', [
                 'unique' => true
+            ]),
+            new Entity\StringField('ASSET_UUID', [
+                'unique' => true
             ]), 
             new Entity\DateField('DATA_ACHIZITIE'),
             new Entity\StringField('FURNIZOR'),
@@ -45,8 +48,8 @@ class EquipmentTable extends Entity\DataManager
             new Entity\StringField('LOCATIE'), 
             new Entity\StringField('CONTRACT_SERVICE'),
             new Entity\TextField('OTHERS_INFO'),
-            new Entity\StringField('BARCODE_TEXT'),
-            new Entity\TextField('QR_CODE_TEXT'), 
+            new Entity\TextField('EXTERNAL_API'),
+            new Entity\DatetimeField('EXTERNAL_SYNC_AT'),
             new Entity\StringField('NOTIFICATION_SENT'),
             new Entity\IntegerField('CREATED_BY'), 
             new Entity\DatetimeField('CREATED_AT'),
@@ -127,7 +130,7 @@ class EquipmentTable extends Entity\DataManager
     public static function sendNewEquipmentNotification($data)
     {
         // Verifică dacă notificările pentru echipamente noi sunt activate
-        $notificationsEnabled = Option::get('bitrix.inventar', 'notification_new_equipment', 'Y');
+        $notificationsEnabled = Option::get('bitrix.inventar', 'notification_new_equipment', 'N');
         
         // Dacă notificările sunt dezactivate, marchează ca trimis și oprește
         if ($notificationsEnabled != 'Y') {
@@ -217,7 +220,7 @@ class EquipmentTable extends Entity\DataManager
     public static function sendAllocationNotification($equipmentId, $userId)
     {
         // Verifică dacă notificările pentru alocare sunt activate
-        $notificationsEnabled = Option::get('bitrix.inventar', 'notification_assignment', 'Y');
+        $notificationsEnabled = Option::get('bitrix.inventar', 'notification_assignment', 'N');
         if ($notificationsEnabled != 'Y') {
             return false;
         }

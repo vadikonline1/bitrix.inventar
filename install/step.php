@@ -4,29 +4,49 @@ if (!check_bitrix_sessid()) return;
 global $APPLICATION;
 
 // Creează fișierele stub în /bitrix/admin/
+// Modulul poate sta in /local/modules (custom) sau /bitrix/modules (legacy).
 $adminDir = $_SERVER["DOCUMENT_ROOT"] . "/bitrix/admin";
-$modulePagesDir = $_SERVER["DOCUMENT_ROOT"] . "/bitrix/modules/bitrix.inventar/admin/pages";
+$moduleBaseDir = is_dir($_SERVER["DOCUMENT_ROOT"] . "/local/modules/bitrix.inventar")
+    ? $_SERVER["DOCUMENT_ROOT"] . "/local/modules/bitrix.inventar"
+    : $_SERVER["DOCUMENT_ROOT"] . "/bitrix/modules/bitrix.inventar";
+$modulePagesDir = $moduleBaseDir . "/admin/pages";
 
 if (is_dir($modulePagesDir)) {
-    $pages = [
-        'dashboard' => 'bitrix_inventar_dashboard.php',
-        'equipment_list' => 'bitrix_inventar_equipment_list.php',
-        'equipment_edit' => 'bitrix_inventar_equipment_edit.php',
-        'allocations' => 'bitrix_inventar_allocations.php',
-        'service' => 'bitrix_inventar_service.php',
-        'import_export' => 'bitrix_inventar_import_export.php',
-        'types_status' => 'bitrix_inventar_types_status.php',
-        'types_info' => 'bitrix_inventar_types_info.php'
-    ];
+    if (!class_exists('Bitrix\Inventar\Schema')) {
+        @require_once $moduleBaseDir . "/lib/Schema.php";
+    }
+    $pages = class_exists('Bitrix\Inventar\Schema')
+        ? Bitrix\Inventar\Schema::adminPages()
+        : [
+            'dashboard' => 'bitrix_inventar_dashboard.php',
+            'equipment_list' => 'bitrix_inventar_equipment_list.php',
+            'equipment_edit' => 'bitrix_inventar_equipment_edit.php',
+            'service' => 'bitrix_inventar_service.php',
+            'import_export' => 'bitrix_inventar_import_export.php',
+            'types_status' => 'bitrix_inventar_types_status.php',
+            'types_info' => 'bitrix_inventar_types_info.php'
+        ];
     
     $createdCount = 0;
     
     foreach ($pages as $pageName => $fileName) {
-        $stubContent = '<?php
+        // Template cu bypass de login pentru API (vezi Schema::buildAdminStub).
+        if (class_exists('Bitrix\Inventar\Schema')) {
+            $stubContent = Bitrix\Inventar\Schema::buildAdminStub($pageName);
+        } elseif (class_exists('bitrix_inventar') && method_exists('bitrix_inventar', 'buildAdminStub')) {
+            $stubContent = bitrix_inventar::buildAdminStub($pageName);
+        } else {
+            $stubContent = '<?php
+// Auto-generated stub - Bitrix Inventar module (do not edit manually).
+// Module location: /local/modules (custom) or /bitrix/modules (legacy).
+$__inventar_root = is_dir($_SERVER["DOCUMENT_ROOT"]."/local/modules/bitrix.inventar")
+    ? $_SERVER["DOCUMENT_ROOT"]."/local/modules/bitrix.inventar"
+    : $_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/bitrix.inventar";
 require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admin_before.php");
-require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/bitrix.inventar/admin/pages/' . $pageName . '.php");
+require_once($__inventar_root."/admin/pages/' . $pageName . '.php");
 require($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/epilog_admin.php");
 ?>';
+        }
         
         $stubFile = $adminDir . "/" . $fileName;
         

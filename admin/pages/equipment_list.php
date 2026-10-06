@@ -8,8 +8,10 @@ use Bitrix\Inventar\EquipmentTable;
 use Bitrix\Inventar\AllocationTable;
 use Bitrix\Inventar\TypesTable;
 use Bitrix\Inventar\StatusTable;
+use Bitrix\Inventar\HistoryTable;
 
 Loader::includeModule('bitrix.inventar');
+
 
 $APPLICATION->SetTitle("Equipment List");
 require($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admin_after.php");
@@ -146,7 +148,7 @@ $sqlHelper = $connection->getSqlHelper();
 
 $whereConditions = [];
 
-// Search - caută în toate câmpurile relevante (inclusiv Manufacturer, Model, Serial)
+// Search - caută în toate câmpurile relevante (inclusiv Manufacturer, Model, Serial, Asset UUID)
 if (!empty($search)) {
     $searchTerm = $sqlHelper->forSql('%' . $search . '%');
     $whereConditions[] = "(e.COD_INVENTAR LIKE '{$searchTerm}' 
@@ -154,6 +156,7 @@ if (!empty($search)) {
                           OR e.PRODUCATOR LIKE '{$searchTerm}' 
                           OR e.MODEL LIKE '{$searchTerm}' 
                           OR e.SERIAL_NR LIKE '{$searchTerm}' 
+                          OR e.ASSET_UUID LIKE '{$searchTerm}' 
                           OR e.LOCATIE LIKE '{$searchTerm}' 
                           OR e.FURNIZOR LIKE '{$searchTerm}')";
 }
@@ -222,7 +225,7 @@ try {
 
 $totalPages = ceil($total / $perPage);
 
-// ========== OBȚINE UTILIZATORII PENTRU FILTRU ==========
+    // ========== OBȚINE UTILIZATORII PENTRU FILTRU ==========
 $arUsers = [];
 $responsibleGroupId = \Bitrix\Main\Config\Option::get('bitrix.inventar', 'responsible_group_id', 0);
 if ($responsibleGroupId) {
@@ -262,6 +265,7 @@ $arHeaders = [
     ["id" => "PRODUCATOR", "content" => "Manufacturer", "default" => true, "width" => 120],
     ["id" => "MODEL", "content" => "Model", "default" => true, "width" => 120],
     ["id" => "SERIAL_NR", "content" => "Serial", "default" => true, "width" => 120],
+    ["id" => "ASSET_UUID", "content" => "Asset UUID", "default" => true, "width" => 140],
     ["id" => "DATA_ACHIZITIE", "content" => "Purchase date", "default" => true, "width" => 100],
     ["id" => "DATA_EXPIRARE_GARANTIE", "content" => "Warranty", "default" => true, "width" => 100],
     ["id" => "STARE_ENUM", "content" => "Status", "default" => true, "width" => 100],
@@ -523,7 +527,7 @@ $backParams = buildBackUrl();
                 <!-- Search - include Manufacturer, Model, Serial -->
                 <div class="filter-group" style="grid-column: 1 / -1;">
                     <label><span class="icon">🔎</span>Global Search</label>
-                    <input type="text" name="search" value="<?= htmlspecialchars($search) ?>" placeholder="Search in: Code, Name, Manufacturer, Model, Serial, Location, Supplier...">
+                    <input type="text" name="search" value="<?= htmlspecialchars($search) ?>" placeholder="Search in: Code, Name, Manufacturer, Model, Serial, Asset UUID, Location, Supplier...">
                 </div>
                 
                 <hr class="filter-divider">
@@ -704,6 +708,7 @@ foreach ($list as $arRes) {
     $row->AddViewField("PRODUCATOR", htmlspecialchars(!empty($arRes['PRODUCATOR']) ? $arRes['PRODUCATOR'] : '-'));
     $row->AddViewField("MODEL", htmlspecialchars(!empty($arRes['MODEL']) ? $arRes['MODEL'] : '-'));
     $row->AddViewField("SERIAL_NR", htmlspecialchars(!empty($arRes['SERIAL_NR']) ? $arRes['SERIAL_NR'] : '-'));
+    $row->AddViewField("ASSET_UUID", htmlspecialchars(!empty($arRes['ASSET_UUID']) ? $arRes['ASSET_UUID'] : '-'));
     $row->AddViewField("LOCATIE", htmlspecialchars(!empty($arRes['LOCATIE']) ? $arRes['LOCATIE'] : '-'));
     
     $editUrl = "/bitrix/admin/bitrix_inventar_equipment_edit.php?ID=" . $f_ID . $backParams;
@@ -796,7 +801,6 @@ $addUrl = "/bitrix/admin/bitrix_inventar_equipment_edit.php" . ($backParams ? '?
 echo '<br><br>';
 echo '<a href="' . $addUrl . '" class="adm-btn">+ Add new equipment</a>';
 echo '&nbsp;&nbsp;<a href="/bitrix/admin/bitrix_inventar_types_status.php" class="adm-btn">⚙️ Manage Types & Statuses</a>';
-echo '&nbsp;&nbsp;<a href="/bitrix/admin/bitrix_inventar_allocations.php" class="adm-btn">📋 Allocations</a>';
 echo '&nbsp;&nbsp;<a href="/bitrix/admin/bitrix_inventar_service.php" class="adm-btn">🔧 Service</a>';
 
 // ========== JAVASCRIPT PENTRU EDITARE ÎN MASĂ ==========

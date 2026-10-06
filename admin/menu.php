@@ -25,11 +25,6 @@ $aMenu = [
             "title" => "Equipment List"
         ],
         [
-            "text" => "Allocations",
-            "url" => "/bitrix/admin/bitrix_inventar_allocations.php",
-            "title" => "User Allocations"
-        ],
-        [
             "text" => "Service",
             "url" => "/bitrix/admin/bitrix_inventar_service.php",
             "title" => "Service Management"

@@ -69,12 +69,13 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['save'])) {
         'TIP_ENUM' => $_POST['TIP_ENUM'] ?? '',
         'PRODUCATOR' => $_POST['PRODUCATOR'] ?? '',
         'MODEL' => $_POST['MODEL'] ?? '',
-        'SERIAL_NR' => $_POST['SERIAL_NR'] ?? '',
+        'SERIAL_NR' => (trim($_POST['SERIAL_NR'] ?? '') !== '' ? trim($_POST['SERIAL_NR']) : null),
+        'ASSET_UUID' => (trim($_POST['ASSET_UUID'] ?? '') !== '' ? trim($_POST['ASSET_UUID']) : null),
         'DATA_ACHIZITIE' => $dataAchizitie,
         'FURNIZOR' => $_POST['FURNIZOR'] ?? '',
         'COST_ACHIZITIE' => (!empty($_POST['COST_ACHIZITIE']) && is_numeric($_POST['COST_ACHIZITIE'])) ? floatval($_POST['COST_ACHIZITIE']) : null,
         'DATA_EXPIRARE_GARANTIE' => $dataExpirare,
-        'STARE_ENUM' => $_POST['STARE_ENUM'] ?? 'in_stock',
+        'STARE_ENUM' => $_POST['STARE_ENUM'] ?? \Bitrix\Inventar\StatusTable::IN_STOCK,
         'LOCATIE' => $_POST['LOCATIE'] ?? '',
         'CONTRACT_SERVICE' => $_POST['CONTRACT_SERVICE'] ?? ''
     ];
@@ -140,12 +141,13 @@ if (!$equipment) {
         <div class="form-group"><label>Type</label><select name="TIP_ENUM"><?php foreach ($tipOptions as $val => $name): ?><option value="<?= $val ?>" <?= ($equipment['TIP_ENUM'] == $val) ? 'selected' : '' ?>><?= htmlspecialchars($name) ?></option><?php endforeach; ?></select></div>
         <div class="form-row"><div class="form-group"><label>Manufacturer</label><input type="text" name="PRODUCATOR" value="<?= htmlspecialchars($equipment['PRODUCATOR']) ?>"></div><div class="form-group"><label>Model</label><input type="text" name="MODEL" value="<?= htmlspecialchars($equipment['MODEL']) ?>"></div></div>
         <div class="form-group"><label>Serial number</label><input type="text" name="SERIAL_NR" value="<?= htmlspecialchars($equipment['SERIAL_NR']) ?>"></div>
+        <div class="form-group"><label>Asset UUID</label><input type="text" name="ASSET_UUID" value="<?= htmlspecialchars($equipment['ASSET_UUID'] ?? '') ?>" placeholder="ex: b0c648a6-106e-4374-9404-6aed6e883686"></div>
         <div class="form-row"><div class="form-group"><label>Purchase date</label><input type="text" name="DATA_ACHIZITIE" value="<?= $equipment['DATA_ACHIZITIE'] ?>" placeholder="YYYY-MM-DD"><div class="small-text">Format: YYYY-MM-DD</div></div><div class="form-group"><label>Warranty expiry</label><input type="text" name="DATA_EXPIRARE_GARANTIE" value="<?= $equipment['DATA_EXPIRARE_GARANTIE'] ?>" placeholder="YYYY-MM-DD"><div class="small-text">Format: YYYY-MM-DD</div></div></div>
         <div class="form-group"><label>Supplier</label><input type="text" name="FURNIZOR" value="<?= htmlspecialchars($equipment['FURNIZOR']) ?>"></div>
         <div class="form-group"><label>Purchase cost (lei)</label><input type="number" step="0.01" name="COST_ACHIZITIE" value="<?= $equipment['COST_ACHIZITIE'] ?>" placeholder="0.00"></div>
         <div class="form-group"><label>Status</label><select name="STARE_ENUM"><?php foreach ($stareOptions as $val => $info): ?><option value="<?= $val ?>" <?= ($equipment['STARE_ENUM'] == $val) ? 'selected' : '' ?>><?= htmlspecialchars($info['name']) ?></option><?php endforeach; ?></select></div>
         <div class="form-group"><label>Location</label><input type="text" name="LOCATIE" value="<?= htmlspecialchars($equipment['LOCATIE']) ?>"></div>
-        <div class="form-group"><label>Service contract</label><input type="text" name="CONTRACT_SERVICE" value="<?= htmlspecialchars($equipment['CONTRACT_SERVICE']) ?>"></div>
+        <div class="form-group"><label>E-Factura</label><input type="text" name="CONTRACT_SERVICE" value="<?= htmlspecialchars($equipment['CONTRACT_SERVICE']) ?>"></div>
         <div style="margin-top: 30px; text-align: center;"><button type="submit" name="save" class="btn-submit">💾 Save changes</button><a href="/inventar/<?= ($backUrl == 'all') ? 'all/' : '' ?>" class="btn-back">← Cancel</a></div>
     </form>
 </div>

@@ -8,6 +8,7 @@ use Bitrix\Inventar\StatusTable;
 
 Loader::includeModule('bitrix.inventar');
 
+
 $APPLICATION->SetTitle("IT Inventory Dashboard");
 require($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admin_after.php");
 

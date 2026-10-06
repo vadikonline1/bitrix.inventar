@@ -9,6 +9,7 @@ use Bitrix\Inventar\StatusTable;
 
 Loader::includeModule('bitrix.inventar');
 
+
 $APPLICATION->SetTitle("Service and Repairs");
 require($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admin_after.php");
 
@@ -59,7 +60,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['add_service'])) {
             'STATUS_ENUM' => 'in_service'
         ]);
         if ($result->isSuccess()) {
-            EquipmentTable::update($equipmentId, ['STARE_ENUM' => '3']); // 3 = In repair
+            EquipmentTable::update($equipmentId, ['STARE_ENUM' => StatusTable::REPAIR]); // In repair
             CAdminMessage::ShowMessage("Service record added successfully!", "OK");
             LocalRedirect($APPLICATION->GetCurPage());
         } else {
@@ -82,7 +83,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['complete_service'])) {
             'STATUS_ENUM' => 'repaired'
         ]);
         if ($result->isSuccess()) {
-            EquipmentTable::update($service['EQUIPMENT_ID'], ['STARE_ENUM' => '2']); // 2 = In stock
+            EquipmentTable::update($service['EQUIPMENT_ID'], ['STARE_ENUM' => StatusTable::IN_STOCK]); // In stock
             CAdminMessage::ShowMessage("Service completed successfully!", "OK");
             LocalRedirect($APPLICATION->GetCurPage());
         } else {
@@ -97,7 +98,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['delete_service'])) {
     $service = ServiceTable::getById($serviceId)->fetch();
     if ($service) {
         // Restore equipment status to 'in_stock' if it was in repair
-        EquipmentTable::update($service['EQUIPMENT_ID'], ['STARE_ENUM' => '2']);
+        EquipmentTable::update($service['EQUIPMENT_ID'], ['STARE_ENUM' => StatusTable::IN_STOCK]);
         ServiceTable::delete($serviceId);
         CAdminMessage::ShowMessage("Service record deleted successfully!", "OK");
         LocalRedirect($APPLICATION->GetCurPage());

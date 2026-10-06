@@ -40,7 +40,7 @@ class AllocationTable extends Entity\DataManager
         EquipmentTable::sendAllocationNotification($data['EQUIPMENT_ID'], $data['USER_ID']);
         
         // Update equipment status
-        EquipmentTable::update($data['EQUIPMENT_ID'], ['STARE_ENUM' => 'in_use']);
+        EquipmentTable::update($data['EQUIPMENT_ID'], ['STARE_ENUM' => StatusTable::IN_USE]);
     }
 }
 ?>

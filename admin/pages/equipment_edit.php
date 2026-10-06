@@ -54,6 +54,24 @@ function convertToBitrixDate($dateString) {
     return null;
 }
 
+// Sync from external API (single equipment)
+if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['sync_external']) && $ID > 0) {
+    try {
+        $syncRes = \Bitrix\Inventar\ExternalSync::syncOne($ID, true);
+    } catch (\Exception $e) {
+        $syncRes = ['ok' => false, 'error' => $e->getMessage()];
+    }
+    if ($syncRes['ok']) {
+        CAdminMessage::ShowNote("External data synced successfully!");
+    } else {
+        CAdminMessage::ShowMessage([
+            'MESSAGE' => "External sync failed: " . htmlspecialchars($syncRes['error']),
+            'TYPE' => 'ERROR',
+            'HTML' => true
+        ]);
+    }
+}
+
 // Process save
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['save'])) {
     $dataAchizitieStr = trim($_POST['DATA_ACHIZITIE'] ?? '');
@@ -68,18 +86,19 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['save'])) {
         'TIP_ENUM' => $_POST['TIP_ENUM'] ?? '',
         'PRODUCATOR' => $_POST['PRODUCATOR'] ?? '',
         'MODEL' => $_POST['MODEL'] ?? '',
-        'SERIAL_NR' => $_POST['SERIAL_NR'] ?? '',
+        'SERIAL_NR' => (trim($_POST['SERIAL_NR'] ?? '') !== '' ? trim($_POST['SERIAL_NR']) : null),
+        'ASSET_UUID' => (trim($_POST['ASSET_UUID'] ?? '') !== '' ? trim($_POST['ASSET_UUID']) : null),
         'DATA_ACHIZITIE' => $dataAchizitie,
         'FURNIZOR' => $_POST['FURNIZOR'] ?? '',
         'COST_ACHIZITIE' => (!empty($_POST['COST_ACHIZITIE']) && is_numeric($_POST['COST_ACHIZITIE'])) ? floatval($_POST['COST_ACHIZITIE']) : null,
         'DATA_EXPIRARE_GARANTIE' => $dataExpirare,
-        'STARE_ENUM' => $_POST['STARE_ENUM'] ?? '2',
+        'STARE_ENUM' => $_POST['STARE_ENUM'] ?? StatusTable::IN_STOCK,
         'LOCATIE' => $_POST['LOCATIE'] ?? '',
         'CONTRACT_SERVICE' => $_POST['CONTRACT_SERVICE'] ?? ''
     ];
     
-    // Get custom fields for current type
-    $currentTip = $_POST['TIP_ENUM'] ?? 'Workstation';
+    // Get custom fields for current type (default = first type, ID 1)
+    $currentTip = $_POST['TIP_ENUM'] ?? '1';
     $currentCustomFields = CustomFieldsTable::getFieldsByType($currentTip);
     
     $customData = [];
@@ -127,6 +146,18 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['save'])) {
                         $duplicateError = true;
                     }
                 }
+
+                // Verifică ASSET_UUID dacă este completat
+                if (!$duplicateError && !empty($fields['ASSET_UUID'])) {
+                    $existingUuid = EquipmentTable::getList([
+                        'filter' => ['=ASSET_UUID' => $fields['ASSET_UUID']],
+                        'select' => ['ID']
+                    ])->fetch();
+                    if ($existingUuid) {
+                        $errorMessage = "Error: Asset UUID '<strong>{$fields['ASSET_UUID']}</strong>' already exists! Please use a different UUID.";
+                        $duplicateError = true;
+                    }
+                }
             } else {
                 // Pentru editare, verifică dacă codul aparține altui echipament
                 $existingCode = EquipmentTable::getList([
@@ -153,6 +184,21 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['save'])) {
                     ])->fetch();
                     if ($existingSerial) {
                         $errorMessage = "Error: Serial number '<strong>{$fields['SERIAL_NR']}</strong>' is already used by another equipment!";
+                        $duplicateError = true;
+                    }
+                }
+
+                // Verifică ASSET_UUID dacă este completat
+                if (!$duplicateError && !empty($fields['ASSET_UUID'])) {
+                    $existingUuid = EquipmentTable::getList([
+                        'filter' => [
+                            '=ASSET_UUID' => $fields['ASSET_UUID'],
+                            '!=ID' => $ID
+                        ],
+                        'select' => ['ID']
+                    ])->fetch();
+                    if ($existingUuid) {
+                        $errorMessage = "Error: Asset UUID '<strong>{$fields['ASSET_UUID']}</strong>' is already used by another equipment!";
                         $duplicateError = true;
                     }
                 }
@@ -216,7 +262,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['save'])) {
                                 'DATA_PREDARE' => $currentDate
                             ]);
                             if ($allocResult->isSuccess()) {
-                                EquipmentTable::update($ID, ['STARE_ENUM' => '1']);
+                                EquipmentTable::update($ID, ['STARE_ENUM' => StatusTable::IN_USE]);
                             }
                         }
                     } else {
@@ -226,7 +272,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['save'])) {
                             'DATA_PREDARE' => $currentDate
                         ]);
                         if ($allocResult->isSuccess()) {
-                            EquipmentTable::update($ID, ['STARE_ENUM' => '1']);
+                            EquipmentTable::update($ID, ['STARE_ENUM' => StatusTable::IN_USE]);
                         }
                     }
                 } elseif ($selectedUserId == 0) {
@@ -239,7 +285,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['save'])) {
                             'DATA_RETURNARE' => $currentDate,
                             'MOTIV_RETURNARE' => 'Released'
                         ]);
-                        EquipmentTable::update($ID, ['STARE_ENUM' => '2']);
+                        EquipmentTable::update($ID, ['STARE_ENUM' => StatusTable::IN_STOCK]);
                     }
                 }
             }
@@ -283,7 +329,7 @@ if (empty($currentTip) && !empty($equipment['TIP_ENUM'])) {
     $currentTip = $equipment['TIP_ENUM'];
 }
 if (empty($currentTip)) {
-    $currentTip = 'Workstation';
+    $currentTip = '1'; // first type (ID 1)
 }
 
 // Get custom fields for current type
@@ -398,6 +444,13 @@ function updateAllocationInfo() {
             </td>
         </tr>
         <tr>
+            <td>Asset UUID:</td>
+            <td>
+                <input type="text" name="ASSET_UUID" value="<?= htmlspecialchars($equipment['ASSET_UUID'] ?? '') ?>" size="40" placeholder="ex: b0c648a6-106e-4374-9404-6aed6e883686">
+                <br><small style="color:#666;">External asset key — used for External API sync. Must be unique.</small>
+            </td>
+        </tr>
+        <tr>
             <td>Purchase date:<br><small>(YYYY-MM-DD)</small></td>
             <td><input type="text" name="DATA_ACHIZITIE" value="<?= htmlspecialchars($equipment['DATA_ACHIZITIE'] ?? '') ?>" size="20" placeholder="2024-01-15" onblur="validateDate(this)"></td>
         </tr>
@@ -428,7 +481,7 @@ function updateAllocationInfo() {
             <td><input type="text" name="LOCATIE" value="<?= htmlspecialchars($equipment['LOCATIE'] ?? '') ?>" size="40"></td>
         </tr>
         <tr>
-            <td>Service contract:</td>
+            <td>E-Factura:</td>
             <td><input type="text" name="CONTRACT_SERVICE" value="<?= htmlspecialchars($equipment['CONTRACT_SERVICE'] ?? '') ?>" size="40"></td>
         </tr>
         
@@ -502,6 +555,33 @@ function updateAllocationInfo() {
                 </div>
             </td>
         </tr>
+
+        <?php if ($ID > 0): ?>
+        <tr style="background:#f6fff6; border-top: 2px solid #4CAF50;">
+            <td>🌐 External API data:</td>
+            <td>
+                <?php
+                $extCfg = \Bitrix\Inventar\ExternalSync::getConfig();
+                $extKey = \Bitrix\Inventar\ExternalSync::getKeyValue($equipment ?: []);
+                if (!empty($equipment['EXTERNAL_API'])) {
+                    echo \Bitrix\Inventar\ExternalSync::renderExternalHtml($equipment['EXTERNAL_API'], $equipment['EXTERNAL_SYNC_AT'] ?? null);
+                } else {
+                    echo '<div style="color:#999;">No external data synced yet.</div>';
+                }
+                if (empty($extCfg['url'])) {
+                    echo '<div style="margin-top:8px;color:#a00;">⚠️ External API URL is not configured. Set it in <a href="/bitrix/admin/bitrix_inventar_types_status.php">Types &amp; Statuses → External API</a>.</div>';
+                } elseif (empty($extKey['value'])) {
+                    echo '<div style="margin-top:8px;color:#a00;">⚠️ Key field ' . htmlspecialchars($extKey['field']) . ' is empty — sync has nothing to query.</div>';
+                } else {
+                    echo '<div style="margin-top:8px;font-size:12px;color:#666;">Query: <code>' . htmlspecialchars(\Bitrix\Inventar\ExternalSync::buildItemUrl($extKey['value'])) . '</code></div>';
+                }
+                ?>
+                <div style="margin-top:10px;">
+                    <input type="submit" name="sync_external" value="🔄 Sync from external API" class="adm-btn" onclick="return confirm('Sync external data for this equipment now?');">
+                </div>
+            </td>
+        </tr>
+        <?php endif; ?>
     </table>
     
     <input type="submit" name="save" value="Save" class="adm-btn-save">

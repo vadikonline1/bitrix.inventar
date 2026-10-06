@@ -82,7 +82,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['save'])) {
                 'DATA_ACHIZITIE' => $dataAchizitie,
                 'FURNIZOR' => $furnizor,
                 'COST_ACHIZITIE' => $costAchizitie,
-                'STARE_ENUM' => 'in_stock',
+                'ASSET_UUID' => (trim($_POST['ASSET_UUID'] ?? '') !== '' ? trim($_POST['ASSET_UUID']) : null),
+                'STARE_ENUM' => \Bitrix\Inventar\StatusTable::IN_STOCK,
                 'NOTIFICATION_SENT' => 'N'
             ];
             
@@ -91,7 +92,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['save'])) {
 				$newId = $result->getId();
 				
 				// Verifică dacă notificările pentru echipamente noi sunt activate
-				$notificationsEnabled = Option::get('bitrix.inventar', 'notification_new_equipment', 'Y');
+				$notificationsEnabled = Option::get('bitrix.inventar', 'notification_new_equipment', 'N');
 				
 				if ($notificationsEnabled == 'Y') {
 					$_SESSION['INVENTAR_NOTIFICATION'] = [
@@ -155,6 +156,10 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['save'])) {
                 <option value="<?= $val ?>"><?= htmlspecialchars($name) ?></option>
                 <?php endforeach; ?>
             </select>
+        </div>
+        <div class="form-group">
+            <label>🔑 Asset UUID (optional)</label>
+            <input type="text" name="ASSET_UUID" placeholder="ex: b0c648a6-106e-4374-9404-6aed6e883686">
         </div>
         <div class="form-group">
             <label>📅 Purchase date</label>

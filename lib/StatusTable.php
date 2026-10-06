@@ -5,6 +5,17 @@ use Bitrix\Main\Entity;
 
 class StatusTable extends Entity\DataManager
 {
+    /**
+     * Coduri canonice de stare. CODE = ID numeric (vezi install.sql seeds + UPDATE CODE=ID,
+     * si salvarea din types_status care pastreaza ID-urile).
+     * Ordinea seed-urilor NU trebuie schimbata fara a actualiza aceste constante.
+     */
+    const IN_USE = '1';   // In use
+    const IN_STOCK = '2'; // In stock
+    const REPAIR = '3';   // In repair
+    const SCRAPPED = '4'; // Scrapped
+    const LOST = '5';     // Lost
+
     public static function getTableName()
     {
         return 'b_bitrix_inventar_status';

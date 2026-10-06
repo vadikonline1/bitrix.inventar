@@ -139,6 +139,7 @@ if ($id) {
                     <div class="grid-item"><span class="grid-label">Manufacturer:</span><span class="grid-value"><?= htmlspecialchars($eq['PRODUCATOR'] ?: '-') ?></span></div>
                     <div class="grid-item"><span class="grid-label">Model:</span><span class="grid-value"><?= htmlspecialchars($eq['MODEL'] ?: '-') ?></span></div>
                     <div class="grid-item"><span class="grid-label">Serial number:</span><span class="grid-value"><?= htmlspecialchars($eq['SERIAL_NR'] ?: '-') ?></span></div>
+                    <div class="grid-item"><span class="grid-label">Asset UUID:</span><span class="grid-value"><code><?= htmlspecialchars($eq['ASSET_UUID'] ?? '') ?: '-' ?></code></span></div>
                     <div class="grid-item"><span class="grid-label">Status:</span><span class="grid-value"><span class="status-badge" style="background:<?= $stareInfo[$eq['STARE_ENUM']]['color'] ?? '#666' ?>"><?= htmlspecialchars($stareInfo[$eq['STARE_ENUM']]['name'] ?? $eq['STARE_ENUM']) ?></span></span></div>
                     <div class="grid-item"><span class="grid-label">Location:</span><span class="grid-value"><?= htmlspecialchars($eq['LOCATIE'] ?: '-') ?></span></div>
                     <?php if ($eq['DATA_ACHIZITIE']): ?>
@@ -151,7 +152,7 @@ if ($id) {
                     <div class="grid-item"><span class="grid-label">Warranty until:</span><span class="grid-value"><?= date('d.m.Y', strtotime($eq['DATA_EXPIRARE_GARANTIE'])) ?></span></div>
                     <?php endif; ?>
                     <?php if ($eq['CONTRACT_SERVICE']): ?>
-                    <div class="grid-item"><span class="grid-label">Service contract:</span><span class="grid-value"><?= htmlspecialchars($eq['CONTRACT_SERVICE']) ?></span></div>
+                    <div class="grid-item"><span class="grid-label">E-Factura:</span><span class="grid-value"><?= htmlspecialchars($eq['CONTRACT_SERVICE']) ?></span></div>
                     <?php endif; ?>
                 </div>
                 
@@ -168,6 +169,9 @@ if ($id) {
                 </div>
                 <?php endif; ?>
                 
+                <div class="section-title">🌐 External asset data</div>
+                <?= \Bitrix\Inventar\ExternalSync::renderExternalHtml($eq['EXTERNAL_API'] ?? null, $eq['EXTERNAL_SYNC_AT'] ?? null) ?>
+
                 <div class="section-title">📋 Allocation history</div>
                 <?php if (count($allocations) > 0): ?>
                 <div class="table-view">
